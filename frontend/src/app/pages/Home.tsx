@@ -62,7 +62,6 @@ export default function Home() {
       {/* Hero Section */}
       <header className="container mx-auto px-20 py-8">
         <div className="grid md:grid-cols-2 gap-0 items-center py-12">
-          {/* 왼쪽 텍스트 — 아래서 위로 */}
           <motion.div
             variants={fadeUp}
             initial="hidden"
@@ -88,7 +87,6 @@ export default function Home() {
             </div>
           </motion.div>
 
-          {/* 오른쪽 카드 — 오른쪽에서 슬라이드 */}
           <motion.div
             className="relative flex items-center justify-center"
             variants={fadeRight}
@@ -153,16 +151,16 @@ export default function Home() {
 
               <div className="flex gap-3 mt-4">
                 <div className="flex-1 bg-white rounded-2xl shadow px-4 py-3 text-center">
-                  <p className="text-2xl font-bold" style={{ color: '#FF8A3D' }}>1,240+</p>
-                  <p className="text-xs text-gray-500 mt-1">누적 연결</p>
+                  <p className="text-2xl font-bold" style={{ color: '#FF8A3D' }}>🔒</p>
+                  <p className="text-xs text-gray-500 mt-1">안전한 참여</p>
                 </div>
                 <div className="flex-1 bg-white rounded-2xl shadow px-4 py-3 text-center">
-                  <p className="text-2xl font-bold" style={{ color: '#3DAF8A' }}>98%</p>
-                  <p className="text-xs text-gray-500 mt-1">만족도</p>
+                  <p className="text-2xl font-bold" style={{ color: '#3DAF8A' }}>💬</p>
+                  <p className="text-xs text-gray-500 mt-1">정기 대화</p>
                 </div>
                 <div className="flex-1 bg-white rounded-2xl shadow px-4 py-3 text-center">
-                  <p className="text-2xl font-bold text-gray-800">4.9</p>
-                  <p className="text-xs text-gray-500 mt-1">⭐ 평점</p>
+                  <p className="text-2xl font-bold text-gray-800">🤝</p>
+                  <p className="text-xs text-gray-500 mt-1">세대 간 소통</p>
                 </div>
               </div>
             </div>
@@ -214,7 +212,6 @@ export default function Home() {
 
           {/* 어르신 혜택 */}
           <div className="grid md:grid-cols-2 gap-12 items-center mb-24">
-            {/* 태블릿 목업 — 왼쪽에서 슬라이드 */}
             <motion.div
               className="flex items-center justify-center"
               variants={fadeLeft}
@@ -255,7 +252,6 @@ export default function Home() {
               </div>
             </motion.div>
 
-            {/* 텍스트 — 오른쪽에서 슬라이드 */}
             <motion.div
               variants={fadeRight}
               initial="hidden"
@@ -296,7 +292,6 @@ export default function Home() {
 
           {/* 은둔 청년 혜택 */}
           <div className="grid md:grid-cols-2 gap-12 items-center">
-            {/* 청년 대시보드 목업 — 왼쪽에서 슬라이드 */}
             <motion.div
               className="flex items-center justify-center"
               variants={fadeLeft}
@@ -348,7 +343,6 @@ export default function Home() {
               </div>
             </motion.div>
 
-            {/* 텍스트 — 오른쪽에서 슬라이드 */}
             <motion.div
               variants={fadeRight}
               initial="hidden"
