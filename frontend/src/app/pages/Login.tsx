@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, Navigate, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -8,8 +8,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/
 import { Heart, Clock, Ban, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth/AuthContext";
+import { routeForRole } from "../../lib/auth/routes";
 import { ApiError } from "../../lib/api/client";
-import { ErrorCode, type AuthUserResponse, type UserRole } from "../../types/api";
+import { ErrorCode } from "../../types/api";
 
 type DemoAccountStatus = "approved" | "pending" | "suspended" | "rejected";
 
@@ -23,16 +24,9 @@ const DEMO_ACCOUNTS: Record<string, { role: "youth" | "guardian" | "admin" | "se
   "senior@demo.com":    { role: "senior",   status: "approved",  name: "박순자" },
 };
 
-function routeForRole(role: UserRole, user?: AuthUserResponse): string {
-  if (role === "ADMIN") return "/admin";
-  if (role === "GUARDIAN") return "/guardian/dashboard";
-  if (user && user.approvalStatus == null) return "/youth/profile";
-  return "/youth";
-}
-
 export default function Login() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, status, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -40,6 +34,10 @@ export default function Login() {
   const [suspendedDialog, setSuspendedDialog] = useState(false);
   const [rejectedDialog, setRejectedDialog] = useState(false);
   const [rejectionReason, setRejectionReason] = useState<string | null>(null);
+
+  if (status === "authenticated" && user) {
+    return <Navigate to={routeForRole(user.role, user)} replace />;
+  }
 
   const handleDemo = (account: (typeof DEMO_ACCOUNTS)[string]) => {
     if (account.status === "pending") {

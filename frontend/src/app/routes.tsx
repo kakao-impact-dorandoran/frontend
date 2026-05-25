@@ -1,4 +1,5 @@
 import { createBrowserRouter } from "react-router";
+import { RequireAuth } from "../lib/auth/RequireAuth";
 import Root from "./pages/Root";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -29,15 +30,20 @@ export const router = createBrowserRouter([
       { path: "/",                          Component: Home              },
       { path: "/login",                     Component: Login             },
       { path: "/signup",                    Component: Signup            },
-      { path: "/youth",                     Component: YouthDashboard    },
-      { path: "/youth/profile",             Component: YouthProfile      },
-      { path: "/youth/myinfo",              Component: YouthMyInfo       },
-      { path: "/youth/call",               Component: YouthCallScreen   },
-      { path: "/youth/matching",            Component: YouthMatching     },
-      { path: "/youth/schedule",            Component: YouthSchedule     },
-      { path: "/youth/conversations",       Component: YouthConversations },
-      { path: "/youth/journal",             Component: YouthActivityJournal },
-      { path: "/youth/seniors",             Component: YouthSeniors      },
+      {
+        element: <RequireAuth allowedRoles={["YOUTH"]} />,
+        children: [
+          { path: "/youth",                     Component: YouthDashboard    },
+          { path: "/youth/profile",             Component: YouthProfile      },
+          { path: "/youth/myinfo",              Component: YouthMyInfo       },
+          { path: "/youth/call",                Component: YouthCallScreen   },
+          { path: "/youth/matching",            Component: YouthMatching     },
+          { path: "/youth/schedule",            Component: YouthSchedule     },
+          { path: "/youth/conversations",       Component: YouthConversations },
+          { path: "/youth/journal",             Component: YouthActivityJournal },
+          { path: "/youth/seniors",             Component: YouthSeniors      },
+        ],
+      },
       { path: "/senior",                    Component: SeniorTablet      },
       { path: "/guardian/dashboard",         Component: GuardianDashboard  },
       { path: "/guardian/senior-profile",   Component: SeniorProfileSetup },
