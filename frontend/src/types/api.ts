@@ -293,6 +293,37 @@ export interface MatchDetailResponse {
   elder: MatchDetailElderSummary;
 }
 
+// ---------- Elder (GUARDIAN 측) ----------
+/**
+ * 보호자/기관이 등록한 어르신 응답.
+ * 백엔드 DTO: ElderResponse
+ * 엔드포인트:
+ *  - GET /api/v1/elders/my           (GUARDIAN, 본인 어르신 목록)
+ *  - POST /api/v1/elders             (GUARDIAN, 어르신 등록 — 이번 작업 범위 아님)
+ *  - PATCH /api/v1/elders/{elderId}  (GUARDIAN, 어르신 수정 — 이번 작업 범위 아님)
+ *
+ * 매칭 화면(MatchingElderListResponse / MatchingElderDetailResponse)과 달리
+ * 민감정보(phoneNumber/address)를 포함한다.
+ */
+export interface ElderResponse {
+  elderId: string;
+  guardianId: string;
+  name: string;
+  ageGroup: string;
+  gender: Gender;
+  profileImageUrl: string | null;
+  greetingComment: string;
+  phoneNumber: string | null;
+  address: string | null;
+  interests: string[] | null;
+  preferredCallType: CallType;
+  difficultyLevel: DifficultyLevel;
+  requestNotes: string | null;
+  status: ElderStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------- AvailableTime ----------
 /**
  * 백엔드 enum: AvailableTimeOwnerType

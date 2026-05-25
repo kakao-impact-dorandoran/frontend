@@ -1,10 +1,22 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
-import { Heart, LogOut, User, Plus, Tablet, ChevronRight, CheckCircle, XCircle, AlertCircle, Clock, FileText, Flag, BookOpen } from "lucide-react";
+import {
+  Heart, LogOut, User, Plus, Tablet, ChevronRight, CheckCircle, XCircle,
+  AlertCircle, Clock, FileText, Flag, BookOpen, Loader2, RefreshCw,
+} from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ApiError } from "../../lib/api/client";
+import { getMyElders } from "../../lib/api/elder";
+import {
+  createElderAvailableTime,
+  getElderAvailableTimes,
+} from "../../lib/api/availableTime";
+import type { AvailableTimeResponse, ElderResponse } from "../../types/api";
+import { ErrorCode } from "../../types/api";
+import { useAuth } from "../../lib/auth/AuthContext";
 
 type DeviceStatus = "READY" | "SHIPPING" | "DELIVERED";
 
@@ -32,12 +44,90 @@ const DEVICE_LABEL: Record<DeviceStatus, { label: string; color: string; bg: str
   DELIVERED: { label: "배송 완료",    color: "#3DAF8A", bg: "#E8F8F5" },
 };
 
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function todayDateString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function splitLocalDateTime(value: string): { date: string; time: string } {
+  const [date = "", rest = ""] = value.split("T");
+  return { date, time: rest.slice(0, 5) };
+}
+
+function resolveElderListError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "보호자 권한이 필요합니다.";
+    }
+    return err.message || "어르신 목록을 불러오지 못했습니다.";
+  }
+  return "어르신 목록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+function resolveAvailLoadError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return err.message || "가능 시간을 조회할 권한이 없습니다.";
+    if (err.status === 404) return "어르신 정보를 찾을 수 없습니다.";
+    return err.message || "가능 시간을 불러오지 못했습니다.";
+  }
+  return "가능 시간을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+function resolveAvailCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.INVALID_AVAILABLE_TIME_RANGE:
+        return "시작 시간은 종료 시간보다 빨라야 합니다.";
+      case ErrorCode.AVAILABLE_TIME_OVERLAPPED:
+        return "이미 등록된 시간과 겹칩니다.";
+      case ErrorCode.AVAILABLE_TIME_ACCESS_DENIED:
+        return "본인이 등록한 어르신만 가능 시간을 등록할 수 있습니다.";
+      case ErrorCode.INVALID_AVAILABLE_TIME_QUERY:
+        return "요청 형식이 올바르지 않습니다.";
+      case "E001":
+        return "어르신 정보를 찾을 수 없습니다.";
+      case "E002":
+        return "본인이 등록한 어르신만 가능 시간을 등록할 수 있습니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 400) return err.message || "입력값을 확인해 주세요.";
+    if (err.status === 403) return err.message || "이용 권한이 없습니다.";
+    if (err.status === 404) return "어르신 정보를 찾을 수 없습니다.";
+    return err.message || "가능 시간 등록에 실패했습니다.";
+  }
+  return "가능 시간 등록에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 export default function GuardianDashboard() {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [seniors] = useState<Senior[]>([]);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
   const [selectedSenior, setSelectedSenior] = useState<Senior | null>(null);
   const [recordDialogOpen, setRecordDialogOpen] = useState(false);
+
+  const [elders, setElders] = useState<ElderResponse[]>([]);
+  const [eldersLoading, setEldersLoading] = useState(false);
+  const [eldersError, setEldersError] = useState<string | null>(null);
+  const [selectedElderId, setSelectedElderId] = useState<string | null>(null);
+
+  const [elderAvailTimes, setElderAvailTimes] = useState<AvailableTimeResponse[]>([]);
+  const [availLoading, setAvailLoading] = useState(false);
+  const [availError, setAvailError] = useState<string | null>(null);
+
+  const [availDate, setAvailDate] = useState<string>(todayDateString());
+  const [availStart, setAvailStart] = useState<string>("");
+  const [availEnd, setAvailEnd] = useState<string>("");
+  const [isSubmittingAvail, setIsSubmittingAvail] = useState(false);
 
   // F-31 신고하기
   const [reportOpen, setReportOpen] = useState(false);
@@ -77,6 +167,100 @@ export default function GuardianDashboard() {
     setSelectedSenior(senior);
     setRecordDialogOpen(true);
   };
+
+  const loadElders = useCallback(async () => {
+    if (!user) {
+      setElders([]);
+      setEldersError(null);
+      setEldersLoading(false);
+      return;
+    }
+    setEldersLoading(true);
+    setEldersError(null);
+    try {
+      const list = await getMyElders();
+      setElders(list ?? []);
+      setSelectedElderId((prev) => {
+        if (prev && list?.some((e) => e.elderId === prev)) return prev;
+        return list && list.length > 0 ? list[0].elderId : null;
+      });
+    } catch (err) {
+      setElders([]);
+      setSelectedElderId(null);
+      setEldersError(resolveElderListError(err));
+    } finally {
+      setEldersLoading(false);
+    }
+  }, [user]);
+
+  const loadElderAvailTimes = useCallback(
+    async (elderId: string | null) => {
+      if (!elderId) {
+        setElderAvailTimes([]);
+        setAvailError(null);
+        setAvailLoading(false);
+        return;
+      }
+      setAvailLoading(true);
+      setAvailError(null);
+      try {
+        const list = await getElderAvailableTimes(elderId);
+        const sorted = (list ?? []).slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
+        setElderAvailTimes(sorted);
+      } catch (err) {
+        setElderAvailTimes([]);
+        setAvailError(resolveAvailLoadError(err));
+      } finally {
+        setAvailLoading(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    void loadElders();
+  }, [loadElders]);
+
+  useEffect(() => {
+    void loadElderAvailTimes(selectedElderId);
+  }, [selectedElderId, loadElderAvailTimes]);
+
+  const handleSubmitAvail = async () => {
+    if (!user) {
+      toast.error("로그인이 필요합니다.");
+      return;
+    }
+    if (!selectedElderId) {
+      toast.error("어르신을 먼저 선택해 주세요.");
+      return;
+    }
+    if (!availDate || !availStart || !availEnd) {
+      toast.error("날짜와 시작/종료 시간을 모두 입력해 주세요.");
+      return;
+    }
+    if (availEnd <= availStart) {
+      toast.error("종료 시간은 시작 시간보다 늦어야 합니다.");
+      return;
+    }
+
+    setIsSubmittingAvail(true);
+    try {
+      await createElderAvailableTime(selectedElderId, {
+        startTime: `${availDate}T${availStart}:00`,
+        endTime: `${availDate}T${availEnd}:00`,
+      });
+      toast.success("가능 시간이 등록되었습니다.");
+      setAvailStart("");
+      setAvailEnd("");
+      await loadElderAvailTimes(selectedElderId);
+    } catch (err) {
+      toast.error(resolveAvailCreateError(err));
+    } finally {
+      setIsSubmittingAvail(false);
+    }
+  };
+
+  const selectedElder = elders.find((e) => e.elderId === selectedElderId) ?? null;
 
   return (
     <div className="min-h-screen" style={{ fontFamily: 'Pretendard, sans-serif', backgroundColor: '#FAF8F5' }}>
@@ -272,6 +456,210 @@ export default function GuardianDashboard() {
             })}
           </div>
         )}
+
+        {/* 어르신 가능 시간 관리 (FE-4B 백엔드 연동) */}
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-gray-700" style={{ fontSize: '1rem', fontWeight: 600 }}>
+              어르신 가능 시간 관리
+            </h2>
+            <button
+              onClick={() => {
+                void loadElders();
+                if (selectedElderId) void loadElderAvailTimes(selectedElderId);
+              }}
+              disabled={eldersLoading || availLoading}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-emerald-50"
+              style={{ fontSize: '0.75rem', fontWeight: 600 }}
+              aria-label="가능 시간 새로고침"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${(eldersLoading || availLoading) ? 'animate-spin' : ''}`} />
+              새로고침
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm p-5">
+            {eldersLoading ? (
+              <div className="py-6 flex items-center justify-center gap-2 text-gray-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span style={{ fontSize: '0.88rem' }}>어르신 목록을 불러오는 중...</span>
+              </div>
+            ) : eldersError ? (
+              <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{eldersError}</p>
+                <button
+                  onClick={() => void loadElders()}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                  style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.8rem', fontWeight: 600 }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  다시 시도
+                </button>
+              </div>
+            ) : elders.length === 0 ? (
+              <div className="py-6 text-center">
+                <p className="text-gray-500" style={{ fontSize: '0.9rem', fontWeight: 600 }}>등록된 어르신이 없어요</p>
+                <p className="text-gray-400 mt-1" style={{ fontSize: '0.8rem' }}>
+                  먼저 어르신을 등록해 주세요. 등록 후 가능 시간을 관리할 수 있어요.
+                </p>
+                <Link to="/guardian/senior-profile">
+                  <button className="mt-3 px-4 py-2 rounded-2xl text-white" style={{ backgroundColor: '#3DAF8A', fontWeight: 600, fontSize: '0.85rem' }}>
+                    어르신 등록하러 가기
+                  </button>
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* 어르신 선택 */}
+                <div>
+                  <p className="text-gray-700 mb-2" style={{ fontSize: '0.85rem', fontWeight: 600 }}>어르신 선택</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {elders.map((e) => {
+                      const active = e.elderId === selectedElderId;
+                      return (
+                        <button
+                          key={e.elderId}
+                          type="button"
+                          onClick={() => setSelectedElderId(e.elderId)}
+                          className="px-4 py-2 rounded-2xl border-2 transition-colors"
+                          style={{
+                            borderColor: active ? '#3DAF8A' : '#E5E7EB',
+                            backgroundColor: active ? '#E8F8F5' : 'white',
+                            color: active ? '#3DAF8A' : '#6B7280',
+                            fontSize: '0.85rem',
+                            fontWeight: active ? 700 : 500,
+                          }}
+                        >
+                          {e.name} <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>· {e.ageGroup}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {selectedElder && (
+                  <>
+                    {/* 가능 시간 목록 */}
+                    <div>
+                      <p className="text-gray-700 mb-2" style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                        {selectedElder.name} 어르신 가능 시간
+                      </p>
+
+                      {availLoading ? (
+                        <div className="py-5 flex items-center justify-center gap-2 text-gray-400">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span style={{ fontSize: '0.85rem' }}>가능 시간을 불러오는 중...</span>
+                        </div>
+                      ) : availError ? (
+                        <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                          <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{availError}</p>
+                          <button
+                            onClick={() => void loadElderAvailTimes(selectedElderId)}
+                            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                            style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.8rem', fontWeight: 600 }}
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            다시 시도
+                          </button>
+                        </div>
+                      ) : elderAvailTimes.length === 0 ? (
+                        <div className="rounded-2xl p-4 text-center text-gray-400" style={{ backgroundColor: '#FAF8F5', border: '1.5px dashed #E5E7EB' }}>
+                          <Clock className="w-6 h-6 mx-auto mb-1 opacity-40" />
+                          <p style={{ fontSize: '0.85rem' }}>등록된 가능 시간이 없습니다</p>
+                          <p style={{ fontSize: '0.75rem' }}>아래에서 가능 시간을 추가해 주세요.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {elderAvailTimes.map((at) => {
+                            const { date, time: start } = splitLocalDateTime(at.startTime);
+                            const { time: end } = splitLocalDateTime(at.endTime);
+                            return (
+                              <div
+                                key={at.availableTimeId}
+                                className="flex items-center gap-3 px-3 py-2.5 rounded-2xl"
+                                style={{ backgroundColor: '#F0FAF6', border: '1.5px solid #C7EBDB' }}
+                              >
+                                <Clock className="w-4 h-4 flex-shrink-0" style={{ color: '#3DAF8A' }} />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-gray-800" style={{ fontSize: '0.88rem', fontWeight: 600 }}>
+                                    {date} · {start} ~ {end}
+                                  </p>
+                                  <p className="text-gray-400" style={{ fontSize: '0.75rem' }}>
+                                    {at.isBooked ? '청년과 일정이 잡힌 시간입니다' : '대화 가능 시간'}
+                                  </p>
+                                </div>
+                                {at.isBooked && (
+                                  <span
+                                    className="text-xs px-2 py-0.5 rounded-full"
+                                    style={{ backgroundColor: '#EDE9FE', color: '#6D28D9', fontWeight: 600 }}
+                                  >
+                                    예약됨
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 가능 시간 등록 폼 */}
+                    <div className="rounded-2xl p-4" style={{ backgroundColor: '#FAF8F5', border: '1.5px solid #F3F4F6' }}>
+                      <p className="text-gray-700 mb-3" style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                        가능 시간 추가
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                        <div>
+                          <label className="text-gray-500 mb-1 block" style={{ fontSize: '0.72rem' }}>날짜</label>
+                          <input
+                            type="date"
+                            value={availDate}
+                            min={todayDateString()}
+                            onChange={(e) => setAvailDate(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-300 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-gray-500 mb-1 block" style={{ fontSize: '0.72rem' }}>시작 시간</label>
+                          <input
+                            type="time"
+                            step={60}
+                            value={availStart}
+                            onChange={(e) => setAvailStart(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-300 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-gray-500 mb-1 block" style={{ fontSize: '0.72rem' }}>종료 시간</label>
+                          <input
+                            type="time"
+                            step={60}
+                            value={availEnd}
+                            onChange={(e) => setAvailEnd(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-emerald-300 bg-white"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleSubmitAvail()}
+                        disabled={isSubmittingAvail}
+                        className="w-full py-2.5 rounded-2xl text-white flex items-center justify-center gap-2 disabled:opacity-60"
+                        style={{ backgroundColor: '#3DAF8A', fontWeight: 700, fontSize: '0.9rem' }}
+                      >
+                        {isSubmittingAvail && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {isSubmittingAvail ? '등록 중...' : '가능 시간 등록'}
+                      </button>
+                      <p className="text-gray-400 mt-2" style={{ fontSize: '0.72rem' }}>
+                        등록된 가능 시간 안에서만 청년과 일정이 잡힐 수 있어요.
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* 전체 활동 기록 다이얼로그 (F-29) */}
