@@ -70,6 +70,12 @@ export const ErrorCode = {
   DUPLICATE_MATCH: "M004",
   ICEBREAKING_MESSAGE_REQUIRED: "M005",
   ELDER_NOT_AVAILABLE: "M006",
+  // 가능 시간
+  AVAILABLE_TIME_NOT_FOUND: "AT001",
+  INVALID_AVAILABLE_TIME_RANGE: "AT002",
+  AVAILABLE_TIME_OVERLAPPED: "AT003",
+  AVAILABLE_TIME_ACCESS_DENIED: "AT004",
+  INVALID_AVAILABLE_TIME_QUERY: "AT005",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -285,4 +291,40 @@ export interface MatchDetailResponse {
   endedAt: string | null;
   youth: MatchDetailYouthSummary;
   elder: MatchDetailElderSummary;
+}
+
+// ---------- AvailableTime ----------
+/**
+ * 백엔드 enum: AvailableTimeOwnerType
+ */
+export type AvailableTimeOwnerType = "YOUTH" | "ELDER";
+
+/**
+ * 가능 시간 응답.
+ * 백엔드 DTO: AvailableTimeResponse
+ * 엔드포인트:
+ *  - POST /api/v1/available-times/youth                       (YOUTH 본인 등록)
+ *  - GET  /api/v1/available-times?ownerType=&ownerId=         (YOUTH/GUARDIAN/ADMIN)
+ *
+ * 시간은 모두 Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface AvailableTimeResponse {
+  availableTimeId: string;
+  ownerType: AvailableTimeOwnerType;
+  ownerId: string;
+  startTime: string;
+  endTime: string;
+  isBooked: boolean;
+}
+
+/**
+ * 청년 가능 시간 등록 요청.
+ * 백엔드 DTO: AvailableTimeCreateRequest
+ * - startTime, endTime: LocalDateTime (예: "2026-05-25T14:00:00")
+ * - startTime < endTime 필수 (AT002)
+ * - 동일 owner 기존 시간과 겹치면 AT003
+ */
+export interface AvailableTimeCreateRequest {
+  startTime: string;
+  endTime: string;
 }

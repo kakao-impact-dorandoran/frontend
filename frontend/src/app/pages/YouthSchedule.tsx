@@ -1,133 +1,297 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Calendar as CalendarComponent } from "../components/ui/calendar";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Heart, ArrowLeft, Clock, Video, Phone, Bell, X, ChevronLeft, ChevronRight } from "lucide-react";
-import { useNavigate } from "react-router";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import {
+  Heart,
+  ArrowLeft,
+  Clock,
+  Video,
+  Phone,
+  Bell,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ApiError } from "../../lib/api/client";
+import {
+  createYouthAvailableTime,
+  getMyYouthAvailableTimes,
+} from "../../lib/api/availableTime";
+import type { AvailableTimeResponse } from "../../types/api";
+import { ErrorCode } from "../../types/api";
+import { useAuth } from "../../lib/auth/AuthContext";
 
-const mockSchedules: { id: number; seniorName: string; avatar: string; date: string; time: string; type: string; status: string }[] = [
+const timeSlots = [
+  "09:00",
+  "10:00",
+  "11:00",
+  "12:00",
+  "13:00",
+  "14:00",
+  "15:00",
+  "16:00",
+  "17:00",
+  "19:00",
+  "20:00",
+];
+
+const mockSchedules: {
+  id: number;
+  seniorName: string;
+  avatar: string;
+  date: string;
+  time: string;
+  type: string;
+  status: string;
+}[] = [
   { id: 1, seniorName: "김복순 어르신", avatar: "👵", date: "2026-05-25", time: "15:00", type: "video", status: "confirmed" },
   { id: 2, seniorName: "김복순 어르신", avatar: "👵", date: "2026-06-03", time: "14:00", type: "voice", status: "confirmed" },
 ];
 
-const timeSlots = ["09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","19:00","20:00"];
-
-const shortName = (full: string) => full.replace(" 어르신", "");
-const typeColor = (type: string) =>
-  type === "video" ? { bg: "#EDE9FE", text: "#6D28D9" } : { bg: "#D1FAE5", text: "#065F46" };
-
-// 매칭된 어르신 목록 (데모)
+// 매칭된 어르신 목록 (데모 — 일정 생성 API 가 연결되기 전까지는 표시용)
 const MATCHED_SENIORS = [
   { id: 1, name: "김복순 어르신", defaultType: "video" as const },
 ];
 
-type ScheduleSlot = { time: string; type: "video" | "voice"; note: string; seniorName: string; auto?: boolean };
+const typeColor = (type: string) =>
+  type === "video" ? { bg: "#EDE9FE", text: "#6D28D9" } : { bg: "#D1FAE5", text: "#065F46" };
 
-// 매칭 수락 시 자동 입력된 시간대 (데모: 김복순 어르신 - 매주 일요일 15:00 영상)
-const AUTO_SLOTS: Record<string, ScheduleSlot[]> = {
-  "2026-05-24": [{ time: "15:00", type: "video", note: "매칭 시 자동 등록", seniorName: "김복순 어르신", auto: true }],
-  "2026-05-31": [{ time: "15:00", type: "video", note: "매칭 시 자동 등록", seniorName: "김복순 어르신", auto: true }],
-  "2026-06-07": [{ time: "15:00", type: "video", note: "매칭 시 자동 등록", seniorName: "김복순 어르신", auto: true }],
-  "2026-06-14": [{ time: "15:00", type: "video", note: "매칭 시 자동 등록", seniorName: "김복순 어르신", auto: true }],
-};
+const shortName = (full: string) => full.replace(" 어르신", "");
+
+// 백엔드 LocalDateTime("YYYY-MM-DDTHH:mm:ss") 문자열을 date/time 으로 분리한다.
+// 타임존 변환을 하지 않는다 (백엔드/프론트 모두 Asia/Seoul wall clock 사용).
+function splitLocalDateTime(value: string): { date: string; time: string } {
+  const [date = "", rest = ""] = value.split("T");
+  const time = rest.slice(0, 5);
+  return { date, time };
+}
+
+function dateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function resolveLoadError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.YOUTH_PENDING) return "관리자 승인 완료 후 이용할 수 있습니다.";
+      if (err.code === ErrorCode.YOUTH_REJECTED) return "가입 신청이 반려되어 이용할 수 없습니다.";
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "가능 시간을 조회할 권한이 없습니다.";
+    }
+    return err.message || "가능 시간을 불러오지 못했습니다.";
+  }
+  return "가능 시간을 불러오지 못했습니다. 네트워크 상태를 확인해주세요.";
+}
+
+function resolveCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.INVALID_AVAILABLE_TIME_RANGE:
+        return "시작 시간은 종료 시간보다 빨라야 합니다.";
+      case ErrorCode.AVAILABLE_TIME_OVERLAPPED:
+        return "이미 등록된 시간과 겹칩니다.";
+      case ErrorCode.AVAILABLE_TIME_ACCESS_DENIED:
+        return "가능 시간 등록 권한이 없습니다.";
+      case ErrorCode.INVALID_AVAILABLE_TIME_QUERY:
+        return "요청 형식이 올바르지 않습니다.";
+      case ErrorCode.YOUTH_PENDING:
+        return "관리자 승인 완료 후 이용할 수 있습니다.";
+      case ErrorCode.YOUTH_REJECTED:
+        return "가입 신청이 반려되어 이용할 수 없습니다.";
+      case ErrorCode.ACCOUNT_SUSPENDED:
+        return "이용이 제한된 계정입니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
+    if (err.status === 400) return err.message || "입력값을 확인해 주세요.";
+    if (err.status === 403) return err.message || "이용 권한이 없습니다.";
+    return err.message || "가능 시간 등록에 실패했습니다.";
+  }
+  return "가능 시간 등록에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
 
 export default function YouthSchedule() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const youthId = user?.id;
+
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
-  const [dialogOpen, setDialogOpen]     = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedTime, setSelectedTime] = useState("");
+  const [selectedEndTime, setSelectedEndTime] = useState("");
   const [selectedType, setSelectedType] = useState<"video" | "voice">("video");
   const [selectedSenior, setSelectedSenior] = useState(MATCHED_SENIORS[0].name);
   const [scheduleNote, setScheduleNote] = useState("");
   const [repeatWeekly, setRepeatWeekly] = useState(false);
-  const [repeatCount, setRepeatCount]   = useState(4);
-  const [availability, setAvailability] = useState<Record<string, ScheduleSlot[]>>(AUTO_SLOTS);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ dateStr: string; time: string } | null>(null);
-  const navigate = useNavigate();
+  const [repeatCount, setRepeatCount] = useState(4);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ availableTimeId: string; label: string } | null>(null);
 
-  const dateKey = (d: Date) => {
-    const y  = d.getFullYear();
-    const m  = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${dd}`;
-  };
+  const [myAvailableTimes, setMyAvailableTimes] = useState<AvailableTimeResponse[]>([]);
 
-  // 날짜 → 일정 맵
+  const [availLoading, setAvailLoading] = useState(false);
+  const [availError, setAvailError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const loadAvailableTimes = useCallback(async () => {
+    if (!youthId) {
+      setMyAvailableTimes([]);
+      setAvailLoading(false);
+      setAvailError(null);
+      return;
+    }
+    setAvailLoading(true);
+    setAvailError(null);
+    try {
+      const list = await getMyYouthAvailableTimes(youthId);
+      setMyAvailableTimes(list ?? []);
+    } catch (err) {
+      setMyAvailableTimes([]);
+      setAvailError(resolveLoadError(err));
+    } finally {
+      setAvailLoading(false);
+    }
+  }, [youthId]);
+
+  useEffect(() => {
+    void loadAvailableTimes();
+  }, [loadAvailableTimes]);
+
+  const availabilityByDate = useMemo<Record<string, AvailableTimeResponse[]>>(() => {
+    const map: Record<string, AvailableTimeResponse[]> = {};
+    for (const at of myAvailableTimes) {
+      const { date } = splitLocalDateTime(at.startTime);
+      if (!date) continue;
+      if (!map[date]) map[date] = [];
+      map[date].push(at);
+    }
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    }
+    return map;
+  }, [myAvailableTimes]);
+
+  const availableDates = useMemo(
+    () => Object.keys(availabilityByDate).map((k) => new Date(k)),
+    [availabilityByDate],
+  );
+
+  // 날짜 → mock 일정 맵 (대화 일정 영역, FE-4A 범위 밖)
   const scheduleByDate: Record<string, typeof mockSchedules> = {};
   mockSchedules.forEach((s) => {
     if (!scheduleByDate[s.date]) scheduleByDate[s.date] = [];
     scheduleByDate[s.date].push(s);
   });
 
-  const availableDates = Object.keys(availability)
-    .filter((k) => availability[k].length > 0)
-    .map((k) => new Date(k));
+  const handleSubmit = async () => {
+    if (!youthId) {
+      toast.error("로그인이 필요합니다.");
+      return;
+    }
+    if (!selectedDate || !selectedTime || !selectedEndTime) {
+      toast.error("날짜와 시작/종료 시간을 모두 선택해주세요.");
+      return;
+    }
+    if (selectedEndTime <= selectedTime) {
+      toast.error("종료 시간은 시작 시간보다 늦어야 합니다.");
+      return;
+    }
 
-  const addSlot = (prev: Record<string, ScheduleSlot[]>, key: string, slot: ScheduleSlot) => {
-    const existing = prev[key] ?? [];
-    if (existing.some((s) => s.time === slot.time && s.seniorName === slot.seniorName)) return prev;
-    const sorted = [...existing, slot].sort((a, b) => a.time.localeCompare(b.time));
-    return { ...prev, [key]: sorted };
-  };
+    const count = repeatWeekly ? Math.max(1, Math.min(12, repeatCount)) : 1;
+    const targets: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const d = new Date(selectedDate);
+      d.setDate(d.getDate() + i * 7);
+      targets.push(dateKey(d));
+    }
 
-  const handleAddSchedule = () => {
-    if (!selectedDate || !selectedTime) { toast.error("날짜와 시간을 선택해주세요"); return; }
-    if (!selectedSenior) { toast.error("어르신을 선택해주세요"); return; }
-
-    const slot: ScheduleSlot = { time: selectedTime, type: selectedType, note: scheduleNote.trim(), seniorName: selectedSenior };
-
-    setAvailability((prev) => {
-      let next = { ...prev };
-      const dates: Date[] = [];
-      for (let i = 0; i < (repeatWeekly ? repeatCount : 1); i++) {
-        const d = new Date(selectedDate);
-        d.setDate(d.getDate() + i * 7);
-        dates.push(d);
+    setIsSubmitting(true);
+    let successCount = 0;
+    let lastError: unknown = null;
+    for (const dk of targets) {
+      try {
+        await createYouthAvailableTime({
+          startTime: `${dk}T${selectedTime}:00`,
+          endTime: `${dk}T${selectedEndTime}:00`,
+        });
+        successCount += 1;
+      } catch (err) {
+        lastError = err;
+        break;
       }
-      dates.forEach((d) => { next = addSlot(next, dateKey(d), slot); });
-      return next;
-    });
+    }
+    setIsSubmitting(false);
 
-    const label = repeatWeekly ? `${repeatCount}주 일괄` : selectedDate.toLocaleDateString("ko-KR");
-    toast.success(`${label} ${selectedTime} 등록 완료!`);
-    setSelectedTime(""); setSelectedType("video"); setScheduleNote(""); setRepeatWeekly(false); setRepeatCount(4);
-    setDialogOpen(false);
+    if (lastError) {
+      toast.error(resolveCreateError(lastError));
+      if (successCount > 0) {
+        toast.success(`${successCount}건 등록됨 — 나머지는 다시 시도해 주세요.`);
+      }
+    } else {
+      toast.success(
+        repeatWeekly && count > 1
+          ? `${count}주 가능 시간이 등록되었습니다.`
+          : "가능 시간이 등록되었습니다.",
+      );
+      setDialogOpen(false);
+      setSelectedTime("");
+      setSelectedEndTime("");
+      setSelectedType("video");
+      setScheduleNote("");
+      setRepeatWeekly(false);
+      setRepeatCount(4);
+    }
+
+    await loadAvailableTimes();
   };
 
-  const handleRemoveTime = (dateStr: string, time: string) => {
-    setAvailability((prev) => {
-      const updated = (prev[dateStr] ?? []).filter((s) => s.time !== time);
-      if (updated.length === 0) { const next = { ...prev }; delete next[dateStr]; return next; }
-      return { ...prev, [dateStr]: updated };
-    });
-    toast.success(`${time} 일정이 삭제되었습니다.`);
+  const handleRemovePlaceholder = () => {
+    toast.message("삭제 기능은 다음 단계에서 연결 예정입니다.");
     setDeleteConfirm(null);
   };
 
-  const selectedDateKey       = selectedDate ? dateKey(selectedDate) : "";
-  const selectedDateTimes     = availability[selectedDateKey] ?? [];
+  const selectedDateKey = selectedDate ? dateKey(selectedDate) : "";
+  const selectedDateTimes = availabilityByDate[selectedDateKey] ?? [];
   const selectedDateSchedules = scheduleByDate[selectedDateKey] ?? [];
 
   // ── 캘린더 셀 커스텀 ──────────────────────────────────────
   const CustomDayContent = ({ date }: { date: Date }) => {
-    const key        = dateKey(date);
-    const dayScheds  = scheduleByDate[key] ?? [];
-    const hasAvail   = (availability[key]?.length ?? 0) > 0;
+    const key = dateKey(date);
+    const dayScheds = scheduleByDate[key] ?? [];
+    const availCount = availabilityByDate[key]?.length ?? 0;
 
     return (
       <div
         className="flex flex-col items-start w-full px-1 pt-1 pb-1 gap-0.5"
         style={{ minHeight: "3.8rem" }}
       >
-        {/* 날짜 숫자 */}
         <span className="w-full text-center leading-none mb-0.5" style={{ fontSize: "0.82rem" }}>
           {date.getDate()}
         </span>
 
-        {/* 어르신 일정 칩 */}
         {dayScheds.map((s) => {
           const col = typeColor(s.type);
           return (
@@ -148,46 +312,49 @@ export default function YouthSchedule() {
           );
         })}
 
-        {/* 수기/자동 등록 일정 칩 */}
-        {(availability[key] ?? []).map((slot) => {
-          const col = typeColor(slot.type);
-          return (
-            <div
-              key={slot.time + slot.seniorName}
-              className="w-full rounded-md truncate"
-              style={{
-                backgroundColor: col.bg,
-                color: col.text,
-                fontSize: "0.6rem",
-                fontWeight: 700,
-                padding: "1px 4px",
-                lineHeight: "1.4",
-              }}
-            >
-              {shortName(slot.seniorName)}
-            </div>
-          );
-        })}
+        {availCount > 0 && (
+          <div
+            className="w-full rounded-md truncate"
+            style={{
+              backgroundColor: "#FFF4E6",
+              color: "#FF8A3D",
+              fontSize: "0.6rem",
+              fontWeight: 700,
+              padding: "1px 4px",
+              lineHeight: "1.4",
+            }}
+          >
+            가능 {availCount}건
+          </div>
+        )}
       </div>
     );
   };
 
-  // 다가오는 전체 일정 (mockSchedules + 수기 등록, 오늘 이후)
+  // 다가오는 전체 일정 (mock 대화 일정 + 실제 가능 시간, 오늘 이후)
   const todayKey = dateKey(new Date());
-  const availabilityFlat = Object.entries(availability)
-    .filter(([k]) => k >= todayKey)
-    .flatMap(([date, slots]) =>
-      slots.map((s) => ({
-        id: `${date}-${s.time}-${s.seniorName}`,
-        seniorName: s.seniorName,
-        avatar: "👵",
+  const availabilityFlat = myAvailableTimes
+    .map((at) => {
+      const { date, time } = splitLocalDateTime(at.startTime);
+      const { time: endTime } = splitLocalDateTime(at.endTime);
+      return {
+        id: `avail-${at.availableTimeId}`,
+        seniorName: `가능 시간 ${time}~${endTime}`,
+        avatar: "🕐",
         date,
-        time: s.time,
-        type: s.type,
-        status: "confirmed",
-      }))
-    );
-  const upcomingSchedules = [...mockSchedules.filter((s) => s.date >= todayKey), ...availabilityFlat]
+        time,
+        type: "available" as const,
+        status: at.isBooked ? "booked" : "open",
+      };
+    })
+    .filter((s) => s.date >= todayKey);
+
+  const upcomingSchedules = [
+    ...mockSchedules
+      .filter((s) => s.date >= todayKey)
+      .map((s) => ({ ...s, type: s.type as "video" | "voice" | "available" })),
+    ...availabilityFlat,
+  ]
     .sort((a, b) => (a.date + a.time > b.date + b.time ? 1 : -1))
     .slice(0, 8);
 
@@ -271,14 +438,15 @@ export default function YouthSchedule() {
                 />
               </div>
 
-              {/* 일정 등록 버튼 */}
+              {/* 가능 시간 등록 버튼 */}
               <div className="px-5 pb-5">
                 <button
                   className="w-full py-3 rounded-2xl text-white"
                   style={{ backgroundColor: "#FF8A3D", fontWeight: 700, fontSize: "0.95rem" }}
                   onClick={() => setDialogOpen(true)}
+                  disabled={!youthId}
                 >
-                  일정 등록하기
+                  가능 시간 등록하기
                 </button>
               </div>
             </div>
@@ -318,22 +486,31 @@ export default function YouthSchedule() {
 
             {/* 선택 날짜 세부 사항 */}
             <div className="bg-white rounded-3xl shadow-sm overflow-hidden">
-              <div className="px-6 pt-5 pb-4 border-b border-gray-100">
+              <div className="px-6 pt-5 pb-4 border-b border-gray-100 flex items-center justify-between">
                 <h2 className="text-gray-900" style={{ fontWeight: 700, fontSize: "1.05rem" }}>
                   {selectedDate
                     ? selectedDate.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" })
                     : "날짜를 선택하세요"}
                 </h2>
+                <button
+                  onClick={() => void loadAvailableTimes()}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-orange-50"
+                  style={{ fontSize: "0.75rem", fontWeight: 600 }}
+                  disabled={availLoading}
+                  aria-label="가능 시간 새로고침"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${availLoading ? "animate-spin" : ""}`} />
+                  새로고침
+                </button>
               </div>
 
               <div className="px-6 py-4 space-y-3">
-                {/* 대화 일정 */}
+                {/* 대화 일정 (mock — FE-4A 범위 밖) */}
                 {selectedDateSchedules.length > 0 ? (
                   selectedDateSchedules.map((s) => {
                     const col = typeColor(s.type);
                     return (
                       <div key={s.id} className="rounded-2xl overflow-hidden" style={{ border: `1.5px solid ${col.bg}` }}>
-                        {/* 컬러 헤더 바 */}
                         <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: col.bg }}>
                           <div className="flex items-center gap-2">
                             {s.type === "video"
@@ -353,7 +530,6 @@ export default function YouthSchedule() {
                           </span>
                         </div>
 
-                        {/* 어르신 정보 */}
                         <div className="px-4 py-3 flex items-center gap-3">
                           <span className="text-3xl leading-none">{s.avatar}</span>
                           <div className="flex-1">
@@ -365,20 +541,26 @@ export default function YouthSchedule() {
                           </div>
                         </div>
 
-                        {/* 액션 버튼 */}
                         <div className="px-4 pb-4">
                           {s.status === "confirmed" ? (
                             <div className="flex gap-2">
                               <button
                                 className="flex-1 py-2.5 rounded-xl text-white flex items-center justify-center gap-1.5"
                                 style={{ backgroundColor: "#FF8A3D", fontWeight: 600, fontSize: "0.85rem" }}
-                              onClick={() => navigate(`/youth/call?senior=${encodeURIComponent(s.seniorName)}&type=${s.type === "video" ? "video" : "voice"}`)}
+                                onClick={() =>
+                                  navigate(
+                                    `/youth/call?senior=${encodeURIComponent(s.seniorName)}&type=${
+                                      s.type === "video" ? "video" : "voice"
+                                    }`,
+                                  )
+                                }
                               >
                                 {s.type === "video" ? <><Video className="w-4 h-4" />화상 통화 시작</> : <><Phone className="w-4 h-4" />음성 통화 시작</>}
                               </button>
                               <button
                                 className="px-4 py-2.5 rounded-xl border text-gray-500"
                                 style={{ borderColor: "#E5E7EB", fontWeight: 600, fontSize: "0.85rem" }}
+                                onClick={() => toast.message("일정 변경 기능은 다음 단계에서 연결 예정입니다.")}
                               >
                                 변경
                               </button>
@@ -395,90 +577,136 @@ export default function YouthSchedule() {
                       </div>
                     );
                   })
-                ) : (
-                  selectedDateTimes.length === 0 && (
-                    <div className="py-6 text-center" style={{ color: "#CBD5E1" }}>
-                      <p style={{ fontSize: "2rem" }}>📭</p>
-                      <p className="mt-2 text-gray-400" style={{ fontSize: "0.85rem" }}>이 날 예정된 대화가 없어요</p>
-                    </div>
-                  )
-                )}
+                ) : null}
 
-                {/* 내 등록 일정 */}
-                {selectedDateTimes.length > 0 && (
+                {/* 가능 시간 영역 (FE-4A 백엔드 연동) */}
+                {availLoading ? (
+                  <div className="py-6 flex items-center justify-center gap-2 text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span style={{ fontSize: "0.85rem" }}>가능 시간을 불러오는 중...</span>
+                  </div>
+                ) : availError ? (
+                  <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: "#FFF1F1", border: "1.5px solid #FCA5A5" }}>
+                    <p className="text-sm" style={{ color: "#B91C1C", fontWeight: 600 }}>{availError}</p>
+                    <button
+                      onClick={() => void loadAvailableTimes()}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                      style={{ backgroundColor: "#FF8A3D", color: "white", fontSize: "0.8rem", fontWeight: 600 }}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      다시 시도
+                    </button>
+                  </div>
+                ) : selectedDateTimes.length > 0 ? (
                   <div className="rounded-2xl p-4" style={{ backgroundColor: "#FFF9F0", border: "1.5px solid #FFE4C8" }}>
                     <p className="mb-3" style={{ fontWeight: 600, fontSize: "0.82rem", color: "#92400E" }}>
-                      🕐 내가 등록한 일정
+                      🕐 내가 등록한 가능 시간
                     </p>
                     <div className="space-y-2">
-                      {selectedDateTimes.map((slot) => (
-                        <div
-                          key={slot.time + slot.seniorName}
-                          className="flex items-start gap-3 px-3 py-2.5 rounded-2xl bg-white"
-                          style={{ border: "1.5px solid #FFD4A8" }}
-                        >
-                          <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
-                            {slot.type === "video"
-                              ? <Video className="w-3.5 h-3.5" style={{ color: "#6D28D9" }} />
-                              : <Phone className="w-3.5 h-3.5" style={{ color: "#065F46" }} />}
-                            <span style={{ color: "#FF8A3D", fontWeight: 700, fontSize: "0.85rem" }}>{slot.time}</span>
-                            <span className="text-xs px-1.5 py-0.5 rounded-full" style={slot.type === "video" ? { backgroundColor: "#EDE9FE", color: "#6D28D9", fontWeight: 600 } : { backgroundColor: "#D1FAE5", color: "#065F46", fontWeight: 600 }}>
-                              {slot.type === "video" ? "영상" : "음성"}
-                            </span>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-gray-700 text-xs font-semibold">{slot.seniorName}</p>
-                            {slot.auto && <p className="text-gray-400 text-xs">매칭 시 자동 등록</p>}
-                            {!slot.auto && slot.note && <p className="text-gray-500 text-xs truncate">{slot.note}</p>}
-                          </div>
-                          <button
-                            onClick={() => setDeleteConfirm({ dateStr: selectedDateKey, time: slot.time })}
-                            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-orange-100 transition-colors"
+                      {selectedDateTimes.map((at) => {
+                        const { time: start } = splitLocalDateTime(at.startTime);
+                        const { time: end } = splitLocalDateTime(at.endTime);
+                        return (
+                          <div
+                            key={at.availableTimeId}
+                            className="flex items-start gap-3 px-3 py-2.5 rounded-2xl bg-white"
+                            style={{ border: "1.5px solid #FFD4A8" }}
                           >
-                            <X className="w-3 h-3 text-gray-400" />
-                          </button>
-                        </div>
-                      ))}
+                            <div className="flex items-center gap-1.5 shrink-0 mt-0.5">
+                              <Clock className="w-3.5 h-3.5" style={{ color: "#FF8A3D" }} />
+                              <span style={{ color: "#FF8A3D", fontWeight: 700, fontSize: "0.85rem" }}>
+                                {start} ~ {end}
+                              </span>
+                              {at.isBooked && (
+                                <span
+                                  className="text-xs px-1.5 py-0.5 rounded-full"
+                                  style={{ backgroundColor: "#EDE9FE", color: "#6D28D9", fontWeight: 600 }}
+                                >
+                                  예약됨
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-gray-500 text-xs">
+                                {at.isBooked ? "어르신 일정에 매칭된 시간" : "대화 가능 시간"}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() =>
+                                setDeleteConfirm({
+                                  availableTimeId: at.availableTimeId,
+                                  label: `${start} ~ ${end}`,
+                                })
+                              }
+                              className="shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-orange-100 transition-colors"
+                              aria-label="가능 시간 삭제"
+                            >
+                              <X className="w-3 h-3 text-gray-400" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
+                ) : (
+                  selectedDateSchedules.length === 0 && (
+                    <div className="py-6 text-center" style={{ color: "#CBD5E1" }}>
+                      <p style={{ fontSize: "2rem" }}>📭</p>
+                      <p className="mt-2 text-gray-400" style={{ fontSize: "0.85rem" }}>
+                        이 날 등록된 가능 시간이 없어요
+                      </p>
+                      <p className="text-gray-400" style={{ fontSize: "0.78rem" }}>
+                        아래 "가능 시간 등록하기"로 추가해 보세요.
+                      </p>
+                    </div>
+                  )
                 )}
               </div>
             </div>
 
             {/* 다가오는 전체 일정 */}
             <div className="bg-white rounded-3xl shadow-sm p-6">
-              <h2 className="text-gray-900 mb-1" style={{ fontWeight: 700, fontSize: "1.05rem" }}>다가오는 대화</h2>
+              <h2 className="text-gray-900 mb-1" style={{ fontWeight: 700, fontSize: "1.05rem" }}>다가오는 일정</h2>
               <p className="text-gray-400 mb-4" style={{ fontSize: "0.82rem" }}>클릭하면 캘린더에서 확인할 수 있어요</p>
               <div className="space-y-2.5">
-                {upcomingSchedules.map((s) => {
-                  const d   = new Date(s.date);
-                  const col = typeColor(s.type);
-                  return (
-                    <div
-                      key={s.id}
-                      className="flex items-center gap-3 px-4 py-3 rounded-2xl cursor-pointer hover:shadow-sm transition-shadow"
-                      style={{ border: "1.5px solid #F3F4F6" }}
-                      onClick={() => setSelectedDate(new Date(s.date))}
-                    >
-                      <span className="text-2xl leading-none">{s.avatar}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-gray-800 truncate" style={{ fontWeight: 700, fontSize: "0.88rem" }}>
-                          {s.seniorName}
-                        </p>
-                        <div className="flex items-center gap-1.5 mt-0.5" style={{ color: "#9CA3AF", fontSize: "0.78rem" }}>
-                          <Clock className="w-3 h-3" />
-                          <span>{d.toLocaleDateString("ko-KR", { month: "short", day: "numeric", weekday: "short" })} {s.time}</span>
+                {upcomingSchedules.length === 0 ? (
+                  <p className="text-gray-400 text-sm py-4 text-center">예정된 일정이 없습니다.</p>
+                ) : (
+                  upcomingSchedules.map((s) => {
+                    const d = new Date(s.date);
+                    const col =
+                      s.type === "available"
+                        ? { bg: "#FFF4E6", text: "#FF8A3D" }
+                        : typeColor(s.type);
+                    return (
+                      <div
+                        key={s.id}
+                        className="flex items-center gap-3 px-4 py-3 rounded-2xl cursor-pointer hover:shadow-sm transition-shadow"
+                        style={{ border: "1.5px solid #F3F4F6" }}
+                        onClick={() => setSelectedDate(new Date(s.date))}
+                      >
+                        <span className="text-2xl leading-none">{s.avatar}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-gray-800 truncate" style={{ fontWeight: 700, fontSize: "0.88rem" }}>
+                            {s.seniorName}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-0.5" style={{ color: "#9CA3AF", fontSize: "0.78rem" }}>
+                            <Clock className="w-3 h-3" />
+                            <span>
+                              {d.toLocaleDateString("ko-KR", { month: "short", day: "numeric", weekday: "short" })} {s.time}
+                            </span>
+                          </div>
+                        </div>
+                        <div
+                          className="shrink-0 px-2.5 py-1 rounded-lg text-xs"
+                          style={{ backgroundColor: col.bg, color: col.text, fontWeight: 700 }}
+                        >
+                          {s.type === "video" ? "영상" : s.type === "voice" ? "음성" : "가능"}
                         </div>
                       </div>
-                      <div
-                        className="shrink-0 px-2.5 py-1 rounded-lg text-xs"
-                        style={{ backgroundColor: col.bg, color: col.text, fontWeight: 700 }}
-                      >
-                        {s.type === "video" ? "영상" : "음성"}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -488,25 +716,24 @@ export default function YouthSchedule() {
 
       <ConfirmDialog
         open={!!deleteConfirm}
-        title="일정을 삭제하시겠습니까?"
-        description={deleteConfirm ? `${deleteConfirm.time} 일정이 삭제됩니다.` : undefined}
+        title="가능 시간을 삭제하시겠습니까?"
+        description={deleteConfirm ? `${deleteConfirm.label} 가능 시간이 삭제됩니다.` : undefined}
         confirmLabel="삭제"
-        onConfirm={() => deleteConfirm && handleRemoveTime(deleteConfirm.dateStr, deleteConfirm.time)}
+        onConfirm={() => deleteConfirm && handleRemovePlaceholder()}
         onCancel={() => setDeleteConfirm(null)}
       />
 
-      {/* 일정 등록 다이얼로그 */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!isSubmitting) setDialogOpen(open); }}>
         <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl">
           <DialogHeader>
-            <DialogTitle>일정 등록</DialogTitle>
+            <DialogTitle>가능 시간 등록</DialogTitle>
             <DialogDescription>
-              {selectedDate?.toLocaleDateString("ko-KR")}에 등록할 일정을 입력하세요
+              {selectedDate?.toLocaleDateString("ko-KR")}에 활동 가능한 시간대를 등록하세요. 등록된 시간 안에서만 어르신과 일정을 잡을 수 있어요.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-semibold mb-2 block text-gray-700">어르신 선택</label>
+              <label className="text-sm font-semibold mb-2 block text-gray-700">어르신 선택 <span className="text-gray-400 font-normal">(참고용)</span></label>
               <Select value={selectedSenior} onValueChange={setSelectedSenior}>
                 <SelectTrigger className="rounded-2xl">
                   <SelectValue placeholder="어르신을 선택하세요" />
@@ -517,28 +744,49 @@ export default function YouthSchedule() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-gray-400 mt-1">
+                일정 생성 API 는 다음 단계에서 연결됩니다. 지금은 가능 시간만 등록돼요.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold mb-2 block text-gray-700">시작 시간</label>
+                <Select value={selectedTime} onValueChange={setSelectedTime}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="시작" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {timeSlots.map((time) => (
+                      <SelectItem key={time} value={time}>{time}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold mb-2 block text-gray-700">종료 시간</label>
+                <Select value={selectedEndTime} onValueChange={setSelectedEndTime}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="종료" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {timeSlots
+                      .filter((t) => !selectedTime || t > selectedTime)
+                      .map((time) => (
+                        <SelectItem key={time} value={time}>{time}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div>
-              <label className="text-sm font-semibold mb-2 block text-gray-700">시간 선택</label>
-              <Select value={selectedTime} onValueChange={setSelectedTime}>
-                <SelectTrigger className="rounded-2xl">
-                  <SelectValue placeholder="시간을 선택하세요" />
-                </SelectTrigger>
-                <SelectContent>
-                  {timeSlots.map((time) => (
-                    <SelectItem key={time} value={time}>{time}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <label className="text-sm font-semibold mb-2 block text-gray-700">통화 유형</label>
+              <label className="text-sm font-semibold mb-2 block text-gray-700">통화 유형 <span className="text-gray-400 font-normal">(참고용)</span></label>
               <div className="flex gap-2">
                 {([["video", "영상 통화", "#6D28D9", "#EDE9FE"], ["voice", "음성 통화", "#065F46", "#D1FAE5"]] as const).map(([val, label, textColor, bgColor]) => (
                   <button
                     key={val}
+                    type="button"
                     onClick={() => setSelectedType(val)}
                     className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 text-sm transition-colors"
                     style={{
@@ -559,6 +807,7 @@ export default function YouthSchedule() {
               <label className="text-sm font-semibold mb-2 block text-gray-700">매주 반복 등록</label>
               <div className="flex items-center gap-3 px-4 py-3 rounded-2xl" style={{ backgroundColor: "#FAF8F5" }}>
                 <button
+                  type="button"
                   onClick={() => setRepeatWeekly((v) => !v)}
                   className="relative w-11 h-6 rounded-full transition-colors flex-shrink-0"
                   style={{ backgroundColor: repeatWeekly ? "#FF8A3D" : "#D1D5DB" }}
@@ -598,15 +847,20 @@ export default function YouthSchedule() {
 
             <div className="flex gap-3">
               <button
-                onClick={handleAddSchedule}
-                className="flex-1 py-3 rounded-2xl text-white"
+                type="button"
+                onClick={() => void handleSubmit()}
+                disabled={isSubmitting}
+                className="flex-1 py-3 rounded-2xl text-white flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ backgroundColor: "#FF8A3D", fontWeight: 700 }}
               >
-                등록하기
+                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
+                {isSubmitting ? "등록 중..." : "등록하기"}
               </button>
               <button
+                type="button"
                 onClick={() => setDialogOpen(false)}
-                className="flex-1 py-3 rounded-2xl border text-gray-600"
+                disabled={isSubmitting}
+                className="flex-1 py-3 rounded-2xl border text-gray-600 disabled:opacity-60"
                 style={{ borderColor: "#E5E7EB", fontWeight: 600 }}
               >
                 취소
