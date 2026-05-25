@@ -28,6 +28,7 @@ import {
   ChevronRight,
   Loader2,
   RefreshCw,
+  CalendarPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -36,7 +37,17 @@ import {
   createYouthAvailableTime,
   getMyYouthAvailableTimes,
 } from "../../lib/api/availableTime";
-import type { AvailableTimeResponse } from "../../types/api";
+import { getMyMatches } from "../../lib/api/matching";
+import {
+  cancelSchedule,
+  createSchedule,
+  getMySchedules,
+} from "../../lib/api/schedule";
+import type {
+  AvailableTimeResponse,
+  MatchSummaryResponse,
+  ScheduleResponse,
+} from "../../types/api";
 import { ErrorCode } from "../../types/api";
 import { useAuth } from "../../lib/auth/AuthContext";
 
@@ -54,26 +65,7 @@ const timeSlots = [
   "20:00",
 ];
 
-const mockSchedules: {
-  id: number;
-  seniorName: string;
-  avatar: string;
-  date: string;
-  time: string;
-  type: string;
-  status: string;
-}[] = [
-  { id: 1, seniorName: "김복순 어르신", avatar: "👵", date: "2026-05-25", time: "15:00", type: "video", status: "confirmed" },
-  { id: 2, seniorName: "김복순 어르신", avatar: "👵", date: "2026-06-03", time: "14:00", type: "voice", status: "confirmed" },
-];
-
-// 매칭된 어르신 목록 (데모 — 일정 생성 API 가 연결되기 전까지는 표시용)
-const MATCHED_SENIORS = [
-  { id: 1, name: "김복순 어르신", defaultType: "video" as const },
-];
-
-const typeColor = (type: string) =>
-  type === "video" ? { bg: "#EDE9FE", text: "#6D28D9" } : { bg: "#D1FAE5", text: "#065F46" };
+const SCHEDULE_COLOR = { bg: "#EDE9FE", text: "#6D28D9" };
 
 const shortName = (full: string) => full.replace(" 어르신", "");
 
@@ -92,21 +84,21 @@ function dateKey(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
-function resolveLoadError(err: unknown): string {
+function resolveLoadError(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
     if (err.status === 403) {
       if (err.code === ErrorCode.YOUTH_PENDING) return "관리자 승인 완료 후 이용할 수 있습니다.";
       if (err.code === ErrorCode.YOUTH_REJECTED) return "가입 신청이 반려되어 이용할 수 없습니다.";
       if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
-      return err.message || "가능 시간을 조회할 권한이 없습니다.";
+      return err.message || fallback;
     }
-    return err.message || "가능 시간을 불러오지 못했습니다.";
+    return err.message || fallback;
   }
-  return "가능 시간을 불러오지 못했습니다. 네트워크 상태를 확인해주세요.";
+  return `${fallback} 네트워크 상태를 확인해주세요.`;
 }
 
-function resolveCreateError(err: unknown): string {
+function resolveAvailableTimeCreateError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
       case ErrorCode.INVALID_AVAILABLE_TIME_RANGE:
@@ -134,27 +126,106 @@ function resolveCreateError(err: unknown): string {
   return "가능 시간 등록에 실패했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
+function resolveScheduleCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.SCHEDULE_CONFLICT:
+        return "이미 겹치는 일정이 있습니다.";
+      case ErrorCode.SCHEDULE_OUT_OF_AVAILABLE_TIME:
+        return "청년과 어르신의 가능 시간이 겹치는 시간에만 일정을 만들 수 있습니다.";
+      case ErrorCode.MATCH_NOT_SCHEDULABLE:
+        return "매칭된 어르신과만 일정을 만들 수 있습니다.";
+      case ErrorCode.INVALID_SCHEDULE_TIME_RANGE:
+        return "시작 시간은 종료 시간보다 빨라야 합니다.";
+      case ErrorCode.MATCH_NOT_FOUND:
+        return "매칭 정보를 찾을 수 없습니다.";
+      case ErrorCode.MATCH_ACCESS_DENIED:
+      case ErrorCode.ACCESS_DENIED:
+        return "이 매칭에 대한 일정 권한이 없습니다.";
+      case ErrorCode.YOUTH_PENDING:
+        return "관리자 승인 완료 후 이용할 수 있습니다.";
+      case ErrorCode.YOUTH_REJECTED:
+        return "가입 신청이 반려되어 이용할 수 없습니다.";
+      case ErrorCode.ACCOUNT_SUSPENDED:
+        return "이용이 제한된 계정입니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
+    if (err.status === 400) return err.message || "입력값을 확인해 주세요.";
+    if (err.status === 403) return err.message || "일정 생성 권한이 없습니다.";
+    return err.message || "일정 생성에 실패했습니다.";
+  }
+  return "일정 생성에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+function resolveScheduleCancelError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.SCHEDULE_ALREADY_CANCELED:
+        return "이미 취소된 일정입니다.";
+      case ErrorCode.SCHEDULE_ALREADY_COMPLETED:
+        return "이미 완료된 일정은 취소할 수 없습니다.";
+      case ErrorCode.SCHEDULE_NOT_FOUND:
+        return "일정을 찾을 수 없습니다.";
+      case ErrorCode.SCHEDULE_ACCESS_DENIED:
+      case ErrorCode.ACCESS_DENIED:
+        return "이 일정을 취소할 권한이 없습니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
+    return err.message || "일정 취소에 실패했습니다.";
+  }
+  return "일정 취소에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+type ScheduleCancelTarget = {
+  scheduleId: string;
+  label: string;
+};
+
 export default function YouthSchedule() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const youthId = user?.id;
 
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
-  const [dialogOpen, setDialogOpen] = useState(false);
+
+  // 가능 시간 등록 다이얼로그 상태
+  const [availDialogOpen, setAvailDialogOpen] = useState(false);
   const [selectedTime, setSelectedTime] = useState("");
   const [selectedEndTime, setSelectedEndTime] = useState("");
   const [selectedType, setSelectedType] = useState<"video" | "voice">("video");
-  const [selectedSenior, setSelectedSenior] = useState(MATCHED_SENIORS[0].name);
   const [scheduleNote, setScheduleNote] = useState("");
   const [repeatWeekly, setRepeatWeekly] = useState(false);
   const [repeatCount, setRepeatCount] = useState(4);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ availableTimeId: string; label: string } | null>(null);
+  const [isSubmittingAvail, setIsSubmittingAvail] = useState(false);
 
+  // 일정 생성 다이얼로그 상태
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [scheduleMatchId, setScheduleMatchId] = useState("");
+  const [scheduleStart, setScheduleStart] = useState("");
+  const [scheduleEnd, setScheduleEnd] = useState("");
+  const [isSubmittingSchedule, setIsSubmittingSchedule] = useState(false);
+
+  // 데이터
   const [myAvailableTimes, setMyAvailableTimes] = useState<AvailableTimeResponse[]>([]);
-
   const [availLoading, setAvailLoading] = useState(false);
   const [availError, setAvailError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [mySchedules, setMySchedules] = useState<ScheduleResponse[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  const [myMatches, setMyMatches] = useState<MatchSummaryResponse[]>([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState<string | null>(null);
+
+  // 취소/삭제 확인
+  const [cancelTarget, setCancelTarget] = useState<ScheduleCancelTarget | null>(null);
+  const [isCanceling, setIsCanceling] = useState(false);
+  const [deleteAvailConfirm, setDeleteAvailConfirm] = useState<{ availableTimeId: string; label: string } | null>(null);
 
   const loadAvailableTimes = useCallback(async () => {
     if (!youthId) {
@@ -170,15 +241,57 @@ export default function YouthSchedule() {
       setMyAvailableTimes(list ?? []);
     } catch (err) {
       setMyAvailableTimes([]);
-      setAvailError(resolveLoadError(err));
+      setAvailError(resolveLoadError(err, "가능 시간을 불러오지 못했습니다."));
     } finally {
       setAvailLoading(false);
     }
   }, [youthId]);
 
+  const loadSchedules = useCallback(async () => {
+    if (!youthId) {
+      setMySchedules([]);
+      setScheduleLoading(false);
+      setScheduleError(null);
+      return;
+    }
+    setScheduleLoading(true);
+    setScheduleError(null);
+    try {
+      const list = await getMySchedules();
+      setMySchedules(list ?? []);
+    } catch (err) {
+      setMySchedules([]);
+      setScheduleError(resolveLoadError(err, "일정을 불러오지 못했습니다."));
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, [youthId]);
+
+  const loadMyMatches = useCallback(async () => {
+    if (!youthId) {
+      setMyMatches([]);
+      setMatchesLoading(false);
+      setMatchesError(null);
+      return;
+    }
+    setMatchesLoading(true);
+    setMatchesError(null);
+    try {
+      const list = await getMyMatches();
+      setMyMatches(list ?? []);
+    } catch (err) {
+      setMyMatches([]);
+      setMatchesError(resolveLoadError(err, "매칭 목록을 불러오지 못했습니다."));
+    } finally {
+      setMatchesLoading(false);
+    }
+  }, [youthId]);
+
   useEffect(() => {
     void loadAvailableTimes();
-  }, [loadAvailableTimes]);
+    void loadSchedules();
+    void loadMyMatches();
+  }, [loadAvailableTimes, loadSchedules, loadMyMatches]);
 
   const availabilityByDate = useMemo<Record<string, AvailableTimeResponse[]>>(() => {
     const map: Record<string, AvailableTimeResponse[]> = {};
@@ -199,14 +312,27 @@ export default function YouthSchedule() {
     [availabilityByDate],
   );
 
-  // 날짜 → mock 일정 맵 (대화 일정 영역, FE-4A 범위 밖)
-  const scheduleByDate: Record<string, typeof mockSchedules> = {};
-  mockSchedules.forEach((s) => {
-    if (!scheduleByDate[s.date]) scheduleByDate[s.date] = [];
-    scheduleByDate[s.date].push(s);
-  });
+  const scheduleByDate = useMemo<Record<string, ScheduleResponse[]>>(() => {
+    const map: Record<string, ScheduleResponse[]> = {};
+    for (const s of mySchedules) {
+      const { date } = splitLocalDateTime(s.scheduledStartAt);
+      if (!date) continue;
+      if (!map[date]) map[date] = [];
+      map[date].push(s);
+    }
+    for (const date of Object.keys(map)) {
+      map[date].sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt));
+    }
+    return map;
+  }, [mySchedules]);
 
-  const handleSubmit = async () => {
+  // 매칭 중 일정 생성 가능한 매칭만 (MATCHED / IN_PROGRESS)
+  const schedulableMatches = useMemo(
+    () => myMatches.filter((m) => m.status === "MATCHED" || m.status === "IN_PROGRESS"),
+    [myMatches],
+  );
+
+  const handleSubmitAvailability = async () => {
     if (!youthId) {
       toast.error("로그인이 필요합니다.");
       return;
@@ -228,7 +354,7 @@ export default function YouthSchedule() {
       targets.push(dateKey(d));
     }
 
-    setIsSubmitting(true);
+    setIsSubmittingAvail(true);
     let successCount = 0;
     let lastError: unknown = null;
     for (const dk of targets) {
@@ -243,10 +369,10 @@ export default function YouthSchedule() {
         break;
       }
     }
-    setIsSubmitting(false);
+    setIsSubmittingAvail(false);
 
     if (lastError) {
-      toast.error(resolveCreateError(lastError));
+      toast.error(resolveAvailableTimeCreateError(lastError));
       if (successCount > 0) {
         toast.success(`${successCount}건 등록됨 — 나머지는 다시 시도해 주세요.`);
       }
@@ -256,7 +382,7 @@ export default function YouthSchedule() {
           ? `${count}주 가능 시간이 등록되었습니다.`
           : "가능 시간이 등록되었습니다.",
       );
-      setDialogOpen(false);
+      setAvailDialogOpen(false);
       setSelectedTime("");
       setSelectedEndTime("");
       setSelectedType("video");
@@ -268,9 +394,76 @@ export default function YouthSchedule() {
     await loadAvailableTimes();
   };
 
-  const handleRemovePlaceholder = () => {
-    toast.message("삭제 기능은 다음 단계에서 연결 예정입니다.");
-    setDeleteConfirm(null);
+  const openScheduleDialog = () => {
+    if (!youthId) {
+      toast.error("로그인이 필요합니다.");
+      return;
+    }
+    setScheduleMatchId(schedulableMatches[0]?.matchId ?? "");
+    setScheduleStart("");
+    setScheduleEnd("");
+    setScheduleDialogOpen(true);
+  };
+
+  const handleSubmitSchedule = async () => {
+    if (!youthId) {
+      toast.error("로그인이 필요합니다.");
+      return;
+    }
+    if (!selectedDate) {
+      toast.error("일정 날짜를 선택해주세요.");
+      return;
+    }
+    if (!scheduleMatchId) {
+      toast.error("매칭된 어르신을 선택해주세요.");
+      return;
+    }
+    if (!scheduleStart || !scheduleEnd) {
+      toast.error("시작/종료 시간을 모두 선택해주세요.");
+      return;
+    }
+    if (scheduleEnd <= scheduleStart) {
+      toast.error("종료 시간은 시작 시간보다 늦어야 합니다.");
+      return;
+    }
+    const dk = dateKey(selectedDate);
+    setIsSubmittingSchedule(true);
+    try {
+      await createSchedule({
+        matchId: scheduleMatchId,
+        scheduledStartAt: `${dk}T${scheduleStart}:00`,
+        scheduledEndAt: `${dk}T${scheduleEnd}:00`,
+      });
+      toast.success("일정이 생성되었습니다.");
+      setScheduleDialogOpen(false);
+      setScheduleStart("");
+      setScheduleEnd("");
+      await loadSchedules();
+    } catch (err) {
+      toast.error(resolveScheduleCreateError(err));
+    } finally {
+      setIsSubmittingSchedule(false);
+    }
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!cancelTarget) return;
+    setIsCanceling(true);
+    try {
+      await cancelSchedule(cancelTarget.scheduleId);
+      toast.success("일정이 취소되었습니다.");
+      setCancelTarget(null);
+      await loadSchedules();
+    } catch (err) {
+      toast.error(resolveScheduleCancelError(err));
+    } finally {
+      setIsCanceling(false);
+    }
+  };
+
+  const handleRemoveAvailPlaceholder = () => {
+    toast.message("가능 시간 삭제 기능은 다음 단계에서 연결 예정입니다.");
+    setDeleteAvailConfirm(null);
   };
 
   const selectedDateKey = selectedDate ? dateKey(selectedDate) : "";
@@ -293,21 +486,22 @@ export default function YouthSchedule() {
         </span>
 
         {dayScheds.map((s) => {
-          const col = typeColor(s.type);
+          const isCanceled = s.status === "CANCELED";
           return (
             <div
-              key={s.id}
+              key={s.scheduleId}
               className="w-full rounded-md truncate"
               style={{
-                backgroundColor: col.bg,
-                color: col.text,
+                backgroundColor: isCanceled ? "#F3F4F6" : SCHEDULE_COLOR.bg,
+                color: isCanceled ? "#9CA3AF" : SCHEDULE_COLOR.text,
                 fontSize: "0.6rem",
                 fontWeight: 700,
                 padding: "1px 4px",
                 lineHeight: "1.4",
+                textDecoration: isCanceled ? "line-through" : "none",
               }}
             >
-              {shortName(s.seniorName)}
+              {shortName(s.elderName)}
             </div>
           );
         })}
@@ -331,32 +525,39 @@ export default function YouthSchedule() {
     );
   };
 
-  // 다가오는 전체 일정 (mock 대화 일정 + 실제 가능 시간, 오늘 이후)
+  // 다가오는 전체 일정 (실제 일정 + 실제 가능 시간, 오늘 이후, 취소되지 않은 것)
   const todayKey = dateKey(new Date());
-  const availabilityFlat = myAvailableTimes
-    .map((at) => {
+  const upcomingSchedules = useMemo(() => {
+    const fromSchedules = mySchedules
+      .filter((s) => s.status !== "CANCELED")
+      .map((s) => {
+        const { date, time } = splitLocalDateTime(s.scheduledStartAt);
+        return {
+          key: `sched-${s.scheduleId}`,
+          title: s.elderName,
+          avatar: "👵",
+          date,
+          time,
+          kind: "schedule" as const,
+        };
+      });
+    const fromAvail = myAvailableTimes.map((at) => {
       const { date, time } = splitLocalDateTime(at.startTime);
       const { time: endTime } = splitLocalDateTime(at.endTime);
       return {
-        id: `avail-${at.availableTimeId}`,
-        seniorName: `가능 시간 ${time}~${endTime}`,
+        key: `avail-${at.availableTimeId}`,
+        title: `가능 시간 ${time}~${endTime}`,
         avatar: "🕐",
         date,
         time,
-        type: "available" as const,
-        status: at.isBooked ? "booked" : "open",
+        kind: "available" as const,
       };
-    })
-    .filter((s) => s.date >= todayKey);
-
-  const upcomingSchedules = [
-    ...mockSchedules
+    });
+    return [...fromSchedules, ...fromAvail]
       .filter((s) => s.date >= todayKey)
-      .map((s) => ({ ...s, type: s.type as "video" | "voice" | "available" })),
-    ...availabilityFlat,
-  ]
-    .sort((a, b) => (a.date + a.time > b.date + b.time ? 1 : -1))
-    .slice(0, 8);
+      .sort((a, b) => (a.date + a.time > b.date + b.time ? 1 : -1))
+      .slice(0, 8);
+  }, [mySchedules, myAvailableTimes, todayKey]);
 
   return (
     <div className="min-h-screen" style={{ fontFamily: "Pretendard, sans-serif", backgroundColor: "#FAF8F5" }}>
@@ -390,12 +591,8 @@ export default function YouthSchedule() {
                 {/* 범례 */}
                 <div className="flex items-center gap-3 mt-2">
                   <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-2.5 rounded inline-block" style={{ backgroundColor: "#EDE9FE" }} />
-                    <span style={{ fontSize: "0.75rem", color: "#6D28D9" }}>영상 통화</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-2.5 rounded inline-block" style={{ backgroundColor: "#D1FAE5" }} />
-                    <span style={{ fontSize: "0.75rem", color: "#065F46" }}>음성 통화</span>
+                    <span className="w-3 h-2.5 rounded inline-block" style={{ backgroundColor: SCHEDULE_COLOR.bg }} />
+                    <span style={{ fontSize: "0.75rem", color: SCHEDULE_COLOR.text }}>대화 일정</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-3 h-2.5 rounded inline-block" style={{ backgroundColor: "#FFF4E6" }} />
@@ -438,15 +635,24 @@ export default function YouthSchedule() {
                 />
               </div>
 
-              {/* 가능 시간 등록 버튼 */}
-              <div className="px-5 pb-5">
+              {/* 가능 시간 / 일정 등록 버튼 */}
+              <div className="px-5 pb-5 space-y-2">
                 <button
                   className="w-full py-3 rounded-2xl text-white"
                   style={{ backgroundColor: "#FF8A3D", fontWeight: 700, fontSize: "0.95rem" }}
-                  onClick={() => setDialogOpen(true)}
+                  onClick={() => setAvailDialogOpen(true)}
                   disabled={!youthId}
                 >
                   가능 시간 등록하기
+                </button>
+                <button
+                  className="w-full py-3 rounded-2xl border flex items-center justify-center gap-2 disabled:opacity-60"
+                  style={{ borderColor: SCHEDULE_COLOR.text, color: SCHEDULE_COLOR.text, backgroundColor: "white", fontWeight: 700, fontSize: "0.92rem" }}
+                  onClick={openScheduleDialog}
+                  disabled={!youthId}
+                >
+                  <CalendarPlus className="w-4 h-4" />
+                  일정 만들기
                 </button>
               </div>
             </div>
@@ -493,69 +699,100 @@ export default function YouthSchedule() {
                     : "날짜를 선택하세요"}
                 </h2>
                 <button
-                  onClick={() => void loadAvailableTimes()}
+                  onClick={() => { void loadAvailableTimes(); void loadSchedules(); }}
                   className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-orange-50"
                   style={{ fontSize: "0.75rem", fontWeight: 600 }}
-                  disabled={availLoading}
-                  aria-label="가능 시간 새로고침"
+                  disabled={availLoading || scheduleLoading}
+                  aria-label="새로고침"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${availLoading ? "animate-spin" : ""}`} />
+                  <RefreshCw className={`w-3.5 h-3.5 ${availLoading || scheduleLoading ? "animate-spin" : ""}`} />
                   새로고침
                 </button>
               </div>
 
               <div className="px-6 py-4 space-y-3">
-                {/* 대화 일정 (mock — FE-4A 범위 밖) */}
-                {selectedDateSchedules.length > 0 ? (
+                {/* 일정 로딩/에러 */}
+                {scheduleLoading ? (
+                  <div className="py-4 flex items-center justify-center gap-2 text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span style={{ fontSize: "0.85rem" }}>일정을 불러오는 중...</span>
+                  </div>
+                ) : scheduleError ? (
+                  <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: "#FFF1F1", border: "1.5px solid #FCA5A5" }}>
+                    <p className="text-sm" style={{ color: "#B91C1C", fontWeight: 600 }}>{scheduleError}</p>
+                    <button
+                      onClick={() => void loadSchedules()}
+                      className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                      style={{ backgroundColor: "#FF8A3D", color: "white", fontSize: "0.8rem", fontWeight: 600 }}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      다시 시도
+                    </button>
+                  </div>
+                ) : selectedDateSchedules.length > 0 ? (
                   selectedDateSchedules.map((s) => {
-                    const col = typeColor(s.type);
+                    const { time: startTime } = splitLocalDateTime(s.scheduledStartAt);
+                    const { time: endTime } = splitLocalDateTime(s.scheduledEndAt);
+                    const isCanceled = s.status === "CANCELED";
+                    const isCompleted = s.status === "COMPLETED";
+                    const isActive = !isCanceled && !isCompleted;
+                    const col = isCanceled
+                      ? { bg: "#F3F4F6", text: "#9CA3AF" }
+                      : SCHEDULE_COLOR;
+                    const statusLabel =
+                      s.status === "CONFIRMED" ? "확정"
+                      : s.status === "PENDING" ? "대기중"
+                      : s.status === "COMPLETED" ? "완료"
+                      : "취소됨";
                     return (
-                      <div key={s.id} className="rounded-2xl overflow-hidden" style={{ border: `1.5px solid ${col.bg}` }}>
+                      <div key={s.scheduleId} className="rounded-2xl overflow-hidden" style={{ border: `1.5px solid ${col.bg}` }}>
                         <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: col.bg }}>
                           <div className="flex items-center gap-2">
-                            {s.type === "video"
-                              ? <Video  className="w-3.5 h-3.5" style={{ color: col.text }} />
-                              : <Phone  className="w-3.5 h-3.5" style={{ color: col.text }} />}
+                            <Video className="w-3.5 h-3.5" style={{ color: col.text }} />
                             <span style={{ fontSize: "0.78rem", fontWeight: 700, color: col.text }}>
-                              {s.type === "video" ? "영상 통화 (페이스톡)" : "음성 통화 (보이스톡)"}
+                              대화 일정
                             </span>
                           </div>
                           <span
                             className="text-xs px-2.5 py-0.5 rounded-full"
-                            style={s.status === "confirmed"
+                            style={s.status === "CONFIRMED"
                               ? { backgroundColor: "#7C6FD4", color: "white", fontWeight: 600 }
+                              : isCanceled
+                              ? { backgroundColor: "white", color: "#9CA3AF", fontWeight: 600 }
                               : { backgroundColor: "white",   color: "#9CA3AF", fontWeight: 600 }}
                           >
-                            {s.status === "confirmed" ? "확정" : "대기중"}
+                            {statusLabel}
                           </span>
                         </div>
 
                         <div className="px-4 py-3 flex items-center gap-3">
-                          <span className="text-3xl leading-none">{s.avatar}</span>
+                          <span className="text-3xl leading-none">👵</span>
                           <div className="flex-1">
-                            <p className="text-gray-900" style={{ fontWeight: 700, fontSize: "0.95rem" }}>{s.seniorName}</p>
+                            <p className="text-gray-900" style={{ fontWeight: 700, fontSize: "0.95rem" }}>{s.elderName} 어르신</p>
                             <div className="flex items-center gap-1.5 mt-0.5" style={{ color: "#9CA3AF", fontSize: "0.82rem" }}>
                               <Clock className="w-3.5 h-3.5" />
-                              <span>{s.time}</span>
+                              <span>{startTime} ~ {endTime}</span>
                             </div>
+                            {isCanceled && s.cancelReason && (
+                              <p className="text-xs text-gray-400 mt-1">취소 사유: {s.cancelReason}</p>
+                            )}
                           </div>
                         </div>
 
                         <div className="px-4 pb-4">
-                          {s.status === "confirmed" ? (
+                          {isActive ? (
                             <div className="flex gap-2">
                               <button
                                 className="flex-1 py-2.5 rounded-xl text-white flex items-center justify-center gap-1.5"
                                 style={{ backgroundColor: "#FF8A3D", fontWeight: 600, fontSize: "0.85rem" }}
                                 onClick={() =>
                                   navigate(
-                                    `/youth/call?senior=${encodeURIComponent(s.seniorName)}&type=${
-                                      s.type === "video" ? "video" : "voice"
-                                    }`,
+                                    `/youth/call?senior=${encodeURIComponent(s.elderName)}&type=video`,
                                   )
                                 }
                               >
-                                {s.type === "video" ? <><Video className="w-4 h-4" />화상 통화 시작</> : <><Phone className="w-4 h-4" />음성 통화 시작</>}
+                                <Video className="w-4 h-4" />
+                                화상 통화 시작
                               </button>
                               <button
                                 className="px-4 py-2.5 rounded-xl border text-gray-500"
@@ -564,13 +801,26 @@ export default function YouthSchedule() {
                               >
                                 변경
                               </button>
+                              <button
+                                className="px-4 py-2.5 rounded-xl border"
+                                style={{ borderColor: "#FCA5A5", color: "#B91C1C", fontWeight: 600, fontSize: "0.85rem" }}
+                                onClick={() =>
+                                  setCancelTarget({
+                                    scheduleId: s.scheduleId,
+                                    label: `${s.elderName} 어르신 · ${startTime} ~ ${endTime}`,
+                                  })
+                                }
+                              >
+                                취소
+                              </button>
                             </div>
                           ) : (
                             <button
                               className="w-full py-2.5 rounded-xl border text-gray-400"
                               style={{ borderColor: "#E5E7EB", fontWeight: 600, fontSize: "0.85rem" }}
+                              disabled
                             >
-                              일정 조율 중
+                              {isCanceled ? "취소된 일정" : "완료된 일정"}
                             </button>
                           )}
                         </div>
@@ -579,7 +829,7 @@ export default function YouthSchedule() {
                   })
                 ) : null}
 
-                {/* 가능 시간 영역 (FE-4A 백엔드 연동) */}
+                {/* 가능 시간 영역 (FE-4A 백엔드 연동 유지) */}
                 {availLoading ? (
                   <div className="py-6 flex items-center justify-center gap-2 text-gray-400">
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -633,7 +883,7 @@ export default function YouthSchedule() {
                             </div>
                             <button
                               onClick={() =>
-                                setDeleteConfirm({
+                                setDeleteAvailConfirm({
                                   availableTimeId: at.availableTimeId,
                                   label: `${start} ~ ${end}`,
                                 })
@@ -649,14 +899,14 @@ export default function YouthSchedule() {
                     </div>
                   </div>
                 ) : (
-                  selectedDateSchedules.length === 0 && (
+                  selectedDateSchedules.length === 0 && !scheduleLoading && !scheduleError && (
                     <div className="py-6 text-center" style={{ color: "#CBD5E1" }}>
                       <p style={{ fontSize: "2rem" }}>📭</p>
                       <p className="mt-2 text-gray-400" style={{ fontSize: "0.85rem" }}>
-                        이 날 등록된 가능 시간이 없어요
+                        이 날 등록된 일정이 없어요
                       </p>
                       <p className="text-gray-400" style={{ fontSize: "0.78rem" }}>
-                        아래 "가능 시간 등록하기"로 추가해 보세요.
+                        아래 "가능 시간 등록하기" 또는 "일정 만들기"로 추가해 보세요.
                       </p>
                     </div>
                   )
@@ -675,12 +925,12 @@ export default function YouthSchedule() {
                   upcomingSchedules.map((s) => {
                     const d = new Date(s.date);
                     const col =
-                      s.type === "available"
+                      s.kind === "available"
                         ? { bg: "#FFF4E6", text: "#FF8A3D" }
-                        : typeColor(s.type);
+                        : SCHEDULE_COLOR;
                     return (
                       <div
-                        key={s.id}
+                        key={s.key}
                         className="flex items-center gap-3 px-4 py-3 rounded-2xl cursor-pointer hover:shadow-sm transition-shadow"
                         style={{ border: "1.5px solid #F3F4F6" }}
                         onClick={() => setSelectedDate(new Date(s.date))}
@@ -688,7 +938,7 @@ export default function YouthSchedule() {
                         <span className="text-2xl leading-none">{s.avatar}</span>
                         <div className="flex-1 min-w-0">
                           <p className="text-gray-800 truncate" style={{ fontWeight: 700, fontSize: "0.88rem" }}>
-                            {s.seniorName}
+                            {s.title}
                           </p>
                           <div className="flex items-center gap-1.5 mt-0.5" style={{ color: "#9CA3AF", fontSize: "0.78rem" }}>
                             <Clock className="w-3 h-3" />
@@ -701,7 +951,7 @@ export default function YouthSchedule() {
                           className="shrink-0 px-2.5 py-1 rounded-lg text-xs"
                           style={{ backgroundColor: col.bg, color: col.text, fontWeight: 700 }}
                         >
-                          {s.type === "video" ? "영상" : s.type === "voice" ? "음성" : "가능"}
+                          {s.kind === "schedule" ? "일정" : "가능"}
                         </div>
                       </div>
                     );
@@ -714,16 +964,28 @@ export default function YouthSchedule() {
         </div>
       </div>
 
+      {/* 가능 시간 삭제 확인 */}
       <ConfirmDialog
-        open={!!deleteConfirm}
+        open={!!deleteAvailConfirm}
         title="가능 시간을 삭제하시겠습니까?"
-        description={deleteConfirm ? `${deleteConfirm.label} 가능 시간이 삭제됩니다.` : undefined}
+        description={deleteAvailConfirm ? `${deleteAvailConfirm.label} 가능 시간이 삭제됩니다.` : undefined}
         confirmLabel="삭제"
-        onConfirm={() => deleteConfirm && handleRemovePlaceholder()}
-        onCancel={() => setDeleteConfirm(null)}
+        onConfirm={() => deleteAvailConfirm && handleRemoveAvailPlaceholder()}
+        onCancel={() => setDeleteAvailConfirm(null)}
       />
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!isSubmitting) setDialogOpen(open); }}>
+      {/* 일정 취소 확인 */}
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="일정을 취소하시겠습니까?"
+        description={cancelTarget ? `${cancelTarget.label} 일정이 취소됩니다.` : undefined}
+        confirmLabel={isCanceling ? "취소 중..." : "일정 취소"}
+        onConfirm={() => { void handleConfirmCancel(); }}
+        onCancel={() => { if (!isCanceling) setCancelTarget(null); }}
+      />
+
+      {/* 가능 시간 등록 다이얼로그 */}
+      <Dialog open={availDialogOpen} onOpenChange={(open) => { if (!isSubmittingAvail) setAvailDialogOpen(open); }}>
         <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl">
           <DialogHeader>
             <DialogTitle>가능 시간 등록</DialogTitle>
@@ -732,23 +994,6 @@ export default function YouthSchedule() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <label className="text-sm font-semibold mb-2 block text-gray-700">어르신 선택 <span className="text-gray-400 font-normal">(참고용)</span></label>
-              <Select value={selectedSenior} onValueChange={setSelectedSenior}>
-                <SelectTrigger className="rounded-2xl">
-                  <SelectValue placeholder="어르신을 선택하세요" />
-                </SelectTrigger>
-                <SelectContent>
-                  {MATCHED_SENIORS.map((s) => (
-                    <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-gray-400 mt-1">
-                일정 생성 API 는 다음 단계에서 연결됩니다. 지금은 가능 시간만 등록돼요.
-              </p>
-            </div>
-
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-semibold mb-2 block text-gray-700">시작 시간</label>
@@ -848,18 +1093,126 @@ export default function YouthSchedule() {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => void handleSubmit()}
-                disabled={isSubmitting}
+                onClick={() => void handleSubmitAvailability()}
+                disabled={isSubmittingAvail}
                 className="flex-1 py-3 rounded-2xl text-white flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ backgroundColor: "#FF8A3D", fontWeight: 700 }}
               >
-                {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                {isSubmitting ? "등록 중..." : "등록하기"}
+                {isSubmittingAvail && <Loader2 className="w-4 h-4 animate-spin" />}
+                {isSubmittingAvail ? "등록 중..." : "등록하기"}
               </button>
               <button
                 type="button"
-                onClick={() => setDialogOpen(false)}
-                disabled={isSubmitting}
+                onClick={() => setAvailDialogOpen(false)}
+                disabled={isSubmittingAvail}
+                className="flex-1 py-3 rounded-2xl border text-gray-600 disabled:opacity-60"
+                style={{ borderColor: "#E5E7EB", fontWeight: 600 }}
+              >
+                취소
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 일정 생성 다이얼로그 */}
+      <Dialog open={scheduleDialogOpen} onOpenChange={(open) => { if (!isSubmittingSchedule) setScheduleDialogOpen(open); }}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>대화 일정 만들기</DialogTitle>
+            <DialogDescription>
+              {selectedDate?.toLocaleDateString("ko-KR")}에 매칭된 어르신과의 대화 일정을 만듭니다. 양측 가능 시간이 겹치는 시간만 등록할 수 있어요.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-semibold mb-2 block text-gray-700">매칭된 어르신</label>
+              {matchesLoading ? (
+                <div className="flex items-center gap-2 text-gray-400 px-3 py-2.5 rounded-2xl border border-gray-200">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">매칭 목록을 불러오는 중...</span>
+                </div>
+              ) : matchesError ? (
+                <div className="rounded-2xl px-3 py-2.5 text-sm" style={{ backgroundColor: "#FFF1F1", border: "1.5px solid #FCA5A5", color: "#B91C1C" }}>
+                  {matchesError}
+                  <button
+                    onClick={() => void loadMyMatches()}
+                    className="ml-2 underline"
+                    type="button"
+                  >
+                    다시 시도
+                  </button>
+                </div>
+              ) : schedulableMatches.length === 0 ? (
+                <div className="rounded-2xl px-3 py-2.5 text-sm text-gray-500" style={{ backgroundColor: "#FAF8F5", border: "1.5px solid #E5E7EB" }}>
+                  일정 생성이 가능한 매칭이 없습니다. 먼저 어르신과 매칭을 진행해주세요.
+                </div>
+              ) : (
+                <Select value={scheduleMatchId} onValueChange={setScheduleMatchId}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="어르신 선택" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {schedulableMatches.map((m) => (
+                      <SelectItem key={m.matchId} value={m.matchId}>
+                        {m.elderName} 어르신
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold mb-2 block text-gray-700">시작 시간</label>
+                <Select value={scheduleStart} onValueChange={setScheduleStart}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="시작" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {timeSlots.map((time) => (
+                      <SelectItem key={time} value={time}>{time}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold mb-2 block text-gray-700">종료 시간</label>
+                <Select value={scheduleEnd} onValueChange={setScheduleEnd}>
+                  <SelectTrigger className="rounded-2xl">
+                    <SelectValue placeholder="종료" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {timeSlots
+                      .filter((t) => !scheduleStart || t > scheduleStart)
+                      .map((time) => (
+                        <SelectItem key={time} value={time}>{time}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-400">
+              {selectedDate?.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" })} 기준으로 등록됩니다. 날짜를 바꾸려면 캘린더에서 다른 날짜를 먼저 선택해주세요.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSubmitSchedule()}
+                disabled={isSubmittingSchedule || schedulableMatches.length === 0}
+                className="flex-1 py-3 rounded-2xl text-white flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ backgroundColor: SCHEDULE_COLOR.text, fontWeight: 700 }}
+              >
+                {isSubmittingSchedule && <Loader2 className="w-4 h-4 animate-spin" />}
+                {isSubmittingSchedule ? "등록 중..." : "일정 만들기"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setScheduleDialogOpen(false)}
+                disabled={isSubmittingSchedule}
                 className="flex-1 py-3 rounded-2xl border text-gray-600 disabled:opacity-60"
                 style={{ borderColor: "#E5E7EB", fontWeight: 600 }}
               >
