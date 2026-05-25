@@ -61,6 +61,68 @@ export const ErrorCode = {
   YOUTH_REJECTED: "U006",
   JWT_INVALID: "A001",
   JWT_EXPIRED: "A002",
+  YOUTH_KEYWORD_LIMIT_EXCEEDED: "Y001",
+  YOUTH_FORBIDDEN_WORD: "Y002",
+  YOUTH_PROFILE_NOT_FOUND: "Y003",
+  YOUTH_PROFILE_ALREADY_EXISTS: "Y004",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
+
+// ---------- Youth Profile ----------
+/**
+ * 청년 프로필 응답.
+ * 백엔드 DTO: YouthProfileResponse
+ * 엔드포인트: GET /api/v1/youth/profile/me, PATCH /api/v1/youth/profile/me
+ */
+export interface YouthProfileResponse {
+  profileId: string;
+  youthId: string;
+  profileImageUrl: string | null;
+  keywords: string[] | null;
+  greetingComment: string;
+  voiceSampleUrl: string | null;
+  approvalStatus: YouthApprovalStatus;
+  rejectionReason: string | null;
+  activityStatus: YouthActivityStatus;
+  isCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 청년 프로필 등록 응답.
+ * 백엔드 DTO: YouthProfileCreateResponse
+ * 엔드포인트: POST /api/v1/youth/profile
+ */
+export interface YouthProfileCreateResponse {
+  profileId: string;
+  isCompleted: boolean;
+  approvalStatus: YouthApprovalStatus;
+  rejectionReason: string | null;
+}
+
+/**
+ * 청년 프로필 등록 요청.
+ * 백엔드 DTO: YouthProfileCreateRequest
+ * - keywords: 최대 5개
+ * - greetingComment: 필수, 최대 50자
+ */
+export interface YouthProfileCreateRequest {
+  profileImageUrl?: string | null;
+  keywords?: string[] | null;
+  greetingComment: string;
+  voiceSampleUrl?: string | null;
+}
+
+/**
+ * 청년 프로필 수정 요청.
+ * 백엔드 DTO: YouthProfileUpdateRequest
+ * - 모든 필드 optional. greetingComment 보내면 최대 50자.
+ */
+export interface YouthProfileUpdateRequest {
+  profileImageUrl?: string | null;
+  keywords?: string[] | null;
+  greetingComment?: string | null;
+  voiceSampleUrl?: string | null;
+}
