@@ -6,11 +6,14 @@ import { Label } from "../components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Heart, Clock, Ban, XCircle } from "lucide-react";
+import { toast } from "sonner";
+import { useAuth } from "../../lib/auth/AuthContext";
+import { ApiError } from "../../lib/api/client";
+import { ErrorCode, type AuthUserResponse, type UserRole } from "../../types/api";
 
-type AccountStatus = "approved" | "pending" | "suspended" | "rejected";
+type DemoAccountStatus = "approved" | "pending" | "suspended" | "rejected";
 
-// 시연용 더미 계정 (MVP - 프리패스)
-const DEMO_ACCOUNTS: Record<string, { role: "youth" | "guardian" | "admin" | "senior"; status: AccountStatus; name: string }> = {
+const DEMO_ACCOUNTS: Record<string, { role: "youth" | "guardian" | "admin" | "senior"; status: DemoAccountStatus; name: string }> = {
   "youth@demo.com":     { role: "youth",    status: "approved",  name: "김민준" },
   "pending@demo.com":   { role: "youth",    status: "pending",   name: "이서연" },
   "rejected@demo.com":  { role: "youth",    status: "rejected",  name: "홍길동" },
@@ -20,43 +23,79 @@ const DEMO_ACCOUNTS: Record<string, { role: "youth" | "guardian" | "admin" | "se
   "senior@demo.com":    { role: "senior",   status: "approved",  name: "박순자" },
 };
 
+function routeForRole(role: UserRole, user?: AuthUserResponse): string {
+  if (role === "ADMIN") return "/admin";
+  if (role === "GUARDIAN") return "/guardian/dashboard";
+  if (user && user.approvalStatus == null) return "/youth/profile";
+  return "/youth";
+}
+
 export default function Login() {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [pendingDialog, setPendingDialog] = useState(false);
   const [suspendedDialog, setSuspendedDialog] = useState(false);
   const [rejectedDialog, setRejectedDialog] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState<string | null>(null);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleDemo = (account: (typeof DEMO_ACCOUNTS)[string]) => {
+    if (account.status === "pending") {
+      setPendingDialog(true);
+      return;
+    }
+    if (account.status === "rejected") {
+      setRejectionReason(null);
+      setRejectedDialog(true);
+      return;
+    }
+    if (account.status === "suspended") {
+      setSuspendedDialog(true);
+      return;
+    }
+    if (account.role === "admin") navigate("/admin");
+    else if (account.role === "guardian") navigate("/guardian/dashboard");
+    else if (account.role === "senior") navigate("/senior");
+    else navigate("/youth");
+  };
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const account = DEMO_ACCOUNTS[email];
+    if (submitting) return;
 
-    if (account) {
-      if (account.status === "pending") {
-        setPendingDialog(true);
-        return;
-      }
-      if (account.status === "rejected") {
-        setRejectedDialog(true);
-        return;
-      }
-      if (account.status === "suspended") {
-        setSuspendedDialog(true);
-        return;
-      }
-      if (account.role === "admin") {
-        navigate("/admin");
-      } else if (account.role === "guardian") {
-        navigate("/guardian/dashboard");
-      } else if (account.role === "senior") {
-        navigate("/senior");
+    const demo = DEMO_ACCOUNTS[email];
+    if (demo) {
+      handleDemo(demo);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const me = await login(email, password);
+      navigate(routeForRole(me.role, me));
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.code === ErrorCode.YOUTH_PENDING) {
+          setPendingDialog(true);
+          return;
+        }
+        if (err.code === ErrorCode.YOUTH_REJECTED) {
+          setRejectionReason(err.message ?? null);
+          setRejectedDialog(true);
+          return;
+        }
+        if (err.code === ErrorCode.ACCOUNT_SUSPENDED) {
+          setSuspendedDialog(true);
+          return;
+        }
+        toast.error(err.message || "로그인에 실패했습니다.");
       } else {
-        navigate("/youth");
+        toast.error("서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.");
       }
-    } else {
-      // 시연용: 등록되지 않은 계정도 청년 대시보드로 이동
-      navigate("/youth");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -109,8 +148,8 @@ export default function Login() {
                   비밀번호를 잊으셨나요?
                 </Link>
               </div>
-              <Button type="submit" className="w-full rounded-2xl" style={{ backgroundColor: '#FF8A3D' }}>
-                로그인
+              <Button type="submit" className="w-full rounded-2xl" style={{ backgroundColor: '#FF8A3D' }} disabled={submitting}>
+                {submitting ? "로그인 중..." : "로그인"}
               </Button>
             </form>
 
@@ -210,7 +249,9 @@ export default function Login() {
           <div className="text-center space-y-3 pb-2">
             <div className="rounded-2xl p-3 text-left" style={{ backgroundColor: '#FFF4E6', border: '1px solid #FFE8D6' }}>
               <p className="text-xs text-gray-500 mb-1">반려 사유</p>
-              <p className="text-sm text-gray-700">프로필 사진 또는 자기소개 내용이 서비스 운영 기준에 맞지 않습니다. 내용을 수정한 후 다시 제출해주세요.</p>
+              <p className="text-sm text-gray-700">
+                {rejectionReason ?? "프로필 사진 또는 자기소개 내용이 서비스 운영 기준에 맞지 않습니다. 내용을 수정한 후 다시 제출해주세요."}
+              </p>
             </div>
             <p className="text-xs text-gray-400">프로필을 수정하면 재검토를 요청할 수 있습니다.</p>
             <div className="flex gap-2">
