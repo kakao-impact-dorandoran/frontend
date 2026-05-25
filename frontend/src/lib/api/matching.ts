@@ -5,11 +5,15 @@
  *  - GET /api/v1/matching/elders/{elderId}   : 청년용 어르신 상세
  *  - GET /api/v1/matches/limit/me            : 청년 담당 인원 제한 현황
  *  - POST /api/v1/matches                    : 사전 인사말 기반 매칭 생성
+ *  - GET /api/v1/matches/my                  : 내 매칭 목록 (YOUTH/GUARDIAN)
+ *  - GET /api/v1/matches/{matchId}           : 매칭 상세 조회
  */
 
 import type {
   MatchCreateRequest,
+  MatchDetailResponse,
   MatchResponse,
+  MatchSummaryResponse,
   MatchingElderDetailResponse,
   MatchingElderListParams,
   MatchingElderListResponse,
@@ -49,4 +53,18 @@ export function createMatch(body: MatchCreateRequest): Promise<MatchResponse> {
     auth: "bearer",
     body,
   });
+}
+
+export function getMyMatches(): Promise<MatchSummaryResponse[]> {
+  return apiRequest<MatchSummaryResponse[]>("/api/v1/matches/my", {
+    method: "GET",
+    auth: "bearer",
+  });
+}
+
+export function getMatchDetail(matchId: string): Promise<MatchDetailResponse> {
+  return apiRequest<MatchDetailResponse>(
+    `/api/v1/matches/${encodeURIComponent(matchId)}`,
+    { method: "GET", auth: "bearer" },
+  );
 }

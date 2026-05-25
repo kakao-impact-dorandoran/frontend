@@ -230,3 +230,59 @@ export interface YouthMatchLimitResponse {
   remainingMatchCount: number;
   canMatch: boolean;
 }
+
+/**
+ * 내 매칭 목록 응답.
+ * 백엔드 DTO: MatchSummaryResponse
+ * 엔드포인트: GET /api/v1/matches/my (YOUTH/GUARDIAN)
+ */
+export interface MatchSummaryResponse {
+  matchId: string;
+  youthId: string;
+  youthName: string;
+  elderId: string;
+  elderName: string;
+  status: MatchStatus;
+  icebreakingMessage: string;
+  selectedAt: string;
+  matchedAt: string | null;
+  endedAt: string | null;
+}
+
+/**
+ * 매칭 상세 응답 - 어르신 요약 정보.
+ * 백엔드 DTO: MatchDetailResponse.ElderSummary
+ */
+export interface MatchDetailElderSummary {
+  elderId: string;
+  name: string;
+  ageGroup: string;
+  interests: string[] | null;
+  preferredCallType: CallType;
+  difficultyLevel: DifficultyLevel;
+}
+
+/**
+ * 매칭 상세 응답 - 청년 요약 정보.
+ * 백엔드 DTO: MatchDetailResponse.YouthSummary
+ */
+export interface MatchDetailYouthSummary {
+  youthId: string;
+  name: string;
+}
+
+/**
+ * 매칭 상세 응답.
+ * 백엔드 DTO: MatchDetailResponse
+ * 엔드포인트: GET /api/v1/matches/{matchId} (YOUTH/GUARDIAN/ADMIN)
+ */
+export interface MatchDetailResponse {
+  matchId: string;
+  status: MatchStatus;
+  icebreakingMessage: string;
+  selectedAt: string;
+  matchedAt: string | null;
+  endedAt: string | null;
+  youth: MatchDetailYouthSummary;
+  elder: MatchDetailElderSummary;
+}
