@@ -1,99 +1,146 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
-import { Textarea } from "../components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Heart, ArrowLeft, MapPin, Users, Clock, CheckCircle, MessageSquare, User } from "lucide-react";
+import {
+  Heart,
+  ArrowLeft,
+  Users,
+  CheckCircle,
+  User,
+  Loader2,
+  RefreshCw,
+  Phone,
+  Video,
+} from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "../../lib/api/client";
+import { getMatchingElders } from "../../lib/api/matching";
+import type {
+  CallType,
+  DifficultyLevel,
+  MatchingElderListParams,
+  MatchingElderListResponse,
+} from "../../types/api";
 
-const MAX_MATCHES = 5; // F-16: 1인당 최대 담당 인원
-
-type Senior = {
-  id: number;
-  name: string;
-  age: number;
-  ageGroup: string;
-  location: string;
-  interests: string[];
-  availableTime: string;
-  description: string;
-  difficulty: string;
-  matched: boolean;
+const DIFFICULTY_LABEL: Record<DifficultyLevel, string> = {
+  LOW: "쉬움",
+  MEDIUM: "보통",
+  HIGH: "활발",
 };
 
-const mockSeniors: Senior[] = [
-  {
-    id: 1, name: "김순자 어르신", age: 78, ageGroup: "70대", location: "서울 강남구",
-    interests: ["요리", "원예", "옛날 이야기"], availableTime: "오후 2시~4시", difficulty: "보통",
-    description: "손자 손녀들이 멀리 있어 가끔 외로워요. 젊은 친구들과 이야기 나누고 싶어요.",
-    matched: false
-  },
-  {
-    id: 2, name: "박영수 어르신", age: 82, ageGroup: "80대", location: "서울 송파구",
-    interests: ["역사", "독서", "클래식 음악"], availableTime: "오전 10시~12시", difficulty: "활발",
-    description: "역사 이야기를 나누는 걸 좋아합니다. 경청을 잘 해주시는 분이면 좋겠어요.",
-    matched: false
-  },
-  {
-    id: 3, name: "이영희 어르신", age: 75, ageGroup: "70대", location: "경기 분당구",
-    interests: ["영화", "음악", "산책"], availableTime: "저녁 6시~8시", difficulty: "쉬움",
-    description: "영화와 음악을 좋아해요. 밝은 성격의 젊은 친구와 대화하고 싶습니다.",
-    matched: false
-  },
-  {
-    id: 4, name: "최명자 어르신", age: 80, ageGroup: "80대", location: "서울 마포구",
-    interests: ["뜨개질", "전통 음악", "꽃꽂이"], availableTime: "오후 3시~5시", difficulty: "보통",
-    description: "뜨개질과 꽃을 좋아해요. 차분하게 이야기 나눌 수 있는 분을 찾아요.",
-    matched: false
-  },
-  {
-    id: 5, name: "정해수 어르신", age: 71, ageGroup: "70대", location: "인천 연수구",
-    interests: ["바둑", "등산", "낚시"], availableTime: "오전 9시~11시", difficulty: "활발",
-    description: "건강을 유지하며 활동적으로 지내고 있습니다. 바둑 이야기 좋아해요.",
-    matched: false
-  },
+const DIFFICULTY_COLOR: Record<DifficultyLevel, { color: string; backgroundColor: string }> = {
+  LOW: { color: "#3DAF8A", backgroundColor: "#E8F8F5" },
+  MEDIUM: { color: "#3D7AFF", backgroundColor: "#EBF4FF" },
+  HIGH: { color: "#FF8A3D", backgroundColor: "#FFF4E6" },
+};
+
+const CALL_TYPE_LABEL: Record<CallType, string> = {
+  VIDEO: "화상 통화",
+  AUDIO: "음성 통화",
+};
+
+const DIFFICULTY_OPTIONS: Array<{ value: "" | DifficultyLevel; label: string }> = [
+  { value: "", label: "전체" },
+  { value: "LOW", label: "쉬움" },
+  { value: "MEDIUM", label: "보통" },
+  { value: "HIGH", label: "활발" },
 ];
 
-const DIFFICULTY_COLOR: Record<string, { text: string; bg: string }> = {
-  "쉬움":  { text: '#3DAF8A', bg: '#E8F8F5' },
-  "보통":  { text: '#3D7AFF', bg: '#EBF4FF' },
-  "활발":  { text: '#FF8A3D', bg: '#FFF4E6' },
+const CALL_TYPE_OPTIONS: Array<{ value: "" | CallType; label: string }> = [
+  { value: "", label: "전체" },
+  { value: "VIDEO", label: "화상" },
+  { value: "AUDIO", label: "음성" },
+];
+
+type FilterState = {
+  interest: string;
+  preferredCallType: "" | CallType;
+  difficultyLevel: "" | DifficultyLevel;
 };
 
-export default function YouthMatching() {
-  const [seniors, setSeniors] = useState(mockSeniors);
-  const [selectedSenior, setSelectedSenior] = useState<Senior | null>(null);
-  const [iceBreakingOpen, setIceBreakingOpen] = useState(false);
-  const [iceBreakingMsg, setIceBreakingMsg] = useState("");
-  const matchedCount = seniors.filter(s => s.matched).length;
-  const canMatch = matchedCount < MAX_MATCHES;
+const INITIAL_FILTERS: FilterState = {
+  interest: "",
+  preferredCallType: "",
+  difficultyLevel: "",
+};
 
-  const handleSelectSenior = (senior: Senior) => {
-    if (!canMatch && !senior.matched) {
-      toast.error(`담당 인원 한도(${MAX_MATCHES}명)에 도달했습니다.`);
-      return;
+function buildParams(filters: FilterState): MatchingElderListParams | undefined {
+  const params: MatchingElderListParams = {};
+  const interest = filters.interest.trim();
+  if (interest) params.interest = interest;
+  if (filters.preferredCallType) params.preferredCallType = filters.preferredCallType;
+  if (filters.difficultyLevel) params.difficultyLevel = filters.difficultyLevel;
+  return Object.keys(params).length > 0 ? params : undefined;
+}
+
+function resolveErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해주세요.";
+    if (err.status === 403) {
+      return err.message || "매칭 기능 이용 권한이 없습니다. 관리자 승인 여부를 확인해주세요.";
     }
-    setSelectedSenior(senior);
-    setIceBreakingMsg("");
-    setIceBreakingOpen(true);
+    return err.message || "어르신 목록을 불러오지 못했습니다.";
+  }
+  return "어르신 목록을 불러오지 못했습니다. 네트워크 상태를 확인해주세요.";
+}
+
+export default function YouthMatching() {
+  const [elders, setElders] = useState<MatchingElderListResponse[]>([]);
+  const [filters, setFilters] = useState<FilterState>(INITIAL_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<FilterState>(INITIAL_FILTERS);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  const fetchElders = useCallback(async (next: FilterState, mode: "initial" | "refresh") => {
+    if (mode === "initial") {
+      setIsLoading(true);
+    } else {
+      setIsRefreshing(true);
+    }
+    setError(null);
+    try {
+      const data = await getMatchingElders(buildParams(next));
+      setElders(data ?? []);
+      setHasLoadedOnce(true);
+    } catch (err) {
+      setError(resolveErrorMessage(err));
+      setElders([]);
+    } finally {
+      if (mode === "initial") {
+        setIsLoading(false);
+      } else {
+        setIsRefreshing(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchElders(INITIAL_FILTERS, "initial");
+  }, [fetchElders]);
+
+  const applyFilters = () => {
+    setFilters(draftFilters);
+    void fetchElders(draftFilters, "refresh");
   };
 
-  const confirmMatch = () => {
-    if (!iceBreakingMsg.trim()) {
-      toast.error("사전 인사말을 작성해주세요.");
-      return;
-    }
-    setSeniors(prev =>
-      prev.map(s => s.id === selectedSenior?.id ? { ...s, matched: true } : s)
-    );
-    toast.success(`${selectedSenior?.name}과(와) 매칭이 완료되었습니다!`);
-    setIceBreakingOpen(false);
-    setIceBreakingMsg("");
+  const resetFilters = () => {
+    setDraftFilters(INITIAL_FILTERS);
+    setFilters(INITIAL_FILTERS);
+    void fetchElders(INITIAL_FILTERS, "refresh");
+  };
+
+  const handleRetry = () => {
+    void fetchElders(filters, hasLoadedOnce ? "refresh" : "initial");
+  };
+
+  const handleSelectElder = (elder: MatchingElderListResponse) => {
+    toast.info(`${elder.name} 어르신 상세/매칭 신청은 다음 단계에서 연결 예정입니다.`);
   };
 
   return (
-    <div className="min-h-screen" style={{ fontFamily: 'Pretendard, sans-serif', backgroundColor: '#FAF8F5' }}>
+    <div className="min-h-screen" style={{ fontFamily: "Pretendard, sans-serif", backgroundColor: "#FAF8F5" }}>
       <header className="bg-white border-b border-orange-100">
         <div className="container mx-auto px-4 py-4 flex items-center gap-4">
           <Link to="/youth">
@@ -102,164 +149,189 @@ export default function YouthMatching() {
             </Button>
           </Link>
           <div className="flex items-center gap-2">
-            <Heart className="w-6 h-6" style={{ color: '#FF8A3D' }} />
+            <Heart className="w-6 h-6" style={{ color: "#FF8A3D" }} />
             <span className="text-xl font-bold text-gray-900">어르신 매칭</span>
           </div>
         </div>
       </header>
 
       <div className="container mx-auto px-4 py-8 max-w-5xl">
-        {/* 담당 인원 현황 (F-16) */}
-        <div className="bg-white rounded-2xl p-4 shadow-sm mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#FFF4E6' }}>
-              <Users className="w-5 h-5" style={{ color: '#FF8A3D' }} />
-            </div>
-            <div>
-              <p className="font-bold text-gray-900">담당 어르신</p>
-              <p className="text-xs text-gray-400">최대 {MAX_MATCHES}명까지 담당 가능</p>
-            </div>
-          </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold" style={{ color: matchedCount >= MAX_MATCHES ? '#EF4444' : '#FF8A3D' }}>
-              {matchedCount} <span className="text-base text-gray-400">/ {MAX_MATCHES}</span>
-            </p>
-            {matchedCount >= MAX_MATCHES && (
-              <p className="text-xs text-red-400">한도 도달 — 신규 매칭 불가</p>
-            )}
-          </div>
-        </div>
-
-        {/* 헤더 */}
         <div className="mb-4">
           <h2 className="text-xl font-bold text-gray-900">매칭 가능한 어르신</h2>
-          <p className="text-sm text-gray-500">원하시는 어르신을 선택하고 첫인사를 남겨주세요</p>
+          <p className="text-sm text-gray-500">조건에 맞는 어르신을 찾아보세요</p>
         </div>
 
-        {/* 어르신 카드 목록 (F-13, F-14) */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {seniors.map(senior => (
-            <div
-              key={senior.id}
-              className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-lg transition-all hover:-translate-y-0.5"
-              style={{ opacity: senior.matched ? 0.85 : 1 }}
-            >
-              <div className="w-full h-36 relative flex items-center justify-center" style={{ backgroundColor: '#F3F4F6' }}>
-                <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ backgroundColor: '#E5E7EB' }}>
-                  <User className="w-10 h-10 text-gray-400" />
-                </div>
-                {senior.matched && (
-                  <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: 'rgba(61,175,138,0.7)' }}>
-                    <div className="text-center text-white">
-                      <CheckCircle className="w-8 h-8 mx-auto mb-1" />
-                      <p className="text-sm font-bold">매칭 완료</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="p-5">
-                <div className="flex items-start justify-between mb-1">
-                  <h3 className="text-gray-900" style={{ fontWeight: 700, fontSize: '1.05rem' }}>{senior.name}</h3>
-                  <span className="text-xs px-2 py-0.5 rounded-full" style={DIFFICULTY_COLOR[senior.difficulty] ?? { text: '#6B7280', bg: '#F3F4F6' }}>
-                    {senior.difficulty}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mb-3 text-gray-400" style={{ fontSize: '0.82rem' }}>
-                  <span>{senior.ageGroup}</span>
-                  <span>·</span>
-                  <MapPin className="w-3 h-3" />
-                  <span>{senior.location}</span>
-                </div>
-                <div className="flex items-center gap-1 mb-3 text-xs text-gray-400">
-                  <Clock className="w-3 h-3" /> {senior.availableTime}
-                </div>
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {senior.interests.map(i => (
-                    <span key={i} className="text-xs px-2.5 py-1 rounded-full" style={{ backgroundColor: '#FFF4E6', color: '#FF8A3D', fontWeight: 600 }}>
-                      {i}
-                    </span>
-                  ))}
-                </div>
-                <p className="text-gray-500 mb-4" style={{ fontSize: '0.83rem', lineHeight: 1.6 }}>{senior.description}</p>
-                <button
-                  disabled={senior.matched || (!canMatch && !senior.matched)}
-                  className="w-full py-2.5 rounded-2xl text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                  style={{
-                    backgroundColor: senior.matched ? '#3DAF8A' : '#FF8A3D',
-                    fontWeight: 600,
-                    fontSize: '0.9rem'
-                  }}
-                  onClick={() => !senior.matched && handleSelectSenior(senior)}
-                >
-                  {senior.matched ? "매칭됨" : "매칭 신청하기"}
-                </button>
-              </div>
+        <div className="bg-white rounded-2xl p-4 shadow-sm mb-6 grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto]">
+          <input
+            type="text"
+            value={draftFilters.interest}
+            onChange={(e) => setDraftFilters((prev) => ({ ...prev, interest: e.target.value }))}
+            placeholder="관심사 키워드 (예: 산책, 음악)"
+            className="px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-orange-300"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") applyFilters();
+            }}
+          />
+          <select
+            value={draftFilters.preferredCallType}
+            onChange={(e) =>
+              setDraftFilters((prev) => ({ ...prev, preferredCallType: e.target.value as "" | CallType }))
+            }
+            className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:border-orange-300"
+          >
+            {CALL_TYPE_OPTIONS.map((opt) => (
+              <option key={opt.label} value={opt.value}>
+                통화: {opt.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={draftFilters.difficultyLevel}
+            onChange={(e) =>
+              setDraftFilters((prev) => ({ ...prev, difficultyLevel: e.target.value as "" | DifficultyLevel }))
+            }
+            className="px-3 py-2 rounded-xl border border-gray-200 text-sm bg-white focus:outline-none focus:border-orange-300"
+          >
+            {DIFFICULTY_OPTIONS.map((opt) => (
+              <option key={opt.label} value={opt.value}>
+                난이도: {opt.label}
+              </option>
+            ))}
+          </select>
+          <Button
+            onClick={applyFilters}
+            className="rounded-xl text-white"
+            style={{ backgroundColor: "#FF8A3D" }}
+            disabled={isRefreshing}
+          >
+            {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : "검색"}
+          </Button>
+          <Button onClick={resetFilters} variant="outline" className="rounded-xl" disabled={isRefreshing}>
+            초기화
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <div className="text-center py-20 text-gray-400">
+            <Loader2 className="w-8 h-8 mx-auto mb-3 animate-spin" style={{ color: "#FF8A3D" }} />
+            <p>어르신 목록을 불러오는 중...</p>
+          </div>
+        ) : error ? (
+          <div className="bg-white rounded-3xl p-10 text-center shadow-sm">
+            <div className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4" style={{ backgroundColor: "#FEE2E2" }}>
+              <Users className="w-7 h-7 text-red-400" />
             </div>
-          ))}
-        </div>
-
-        {seniors.length === 0 && (
-          <div className="text-center py-16 text-gray-400">
-            <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
-            <p>조건에 맞는 어르신이 없습니다.</p>
+            <p className="text-gray-700 font-semibold mb-1">목록을 불러오지 못했습니다</p>
+            <p className="text-gray-500 mb-5" style={{ fontSize: "0.9rem" }}>{error}</p>
+            <Button
+              onClick={handleRetry}
+              className="rounded-2xl text-white"
+              style={{ backgroundColor: "#FF8A3D" }}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              다시 시도
+            </Button>
+          </div>
+        ) : elders.length === 0 ? (
+          <div className="bg-white rounded-3xl p-10 text-center shadow-sm">
+            <Users className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+            <p className="text-gray-700 font-semibold mb-1">추천 가능한 어르신이 없습니다</p>
+            <p className="text-gray-400" style={{ fontSize: "0.85rem" }}>
+              조건을 바꾸거나 잠시 후 다시 시도해주세요.
+            </p>
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {elders.map((elder) => {
+              const difficultyStyle = DIFFICULTY_COLOR[elder.difficultyLevel];
+              const matched = elder.status === "MATCHED";
+              return (
+                <div
+                  key={elder.elderId}
+                  className="bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-lg transition-all hover:-translate-y-0.5"
+                  style={{ opacity: matched ? 0.85 : 1 }}
+                >
+                  <div className="w-full h-36 relative flex items-center justify-center" style={{ backgroundColor: "#F3F4F6" }}>
+                    {elder.profileImageUrl ? (
+                      <img
+                        src={elder.profileImageUrl}
+                        alt={`${elder.name} 어르신 프로필`}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ backgroundColor: "#E5E7EB" }}>
+                        <User className="w-10 h-10 text-gray-400" />
+                      </div>
+                    )}
+                    {matched && (
+                      <div className="absolute inset-0 flex items-center justify-center" style={{ backgroundColor: "rgba(61,175,138,0.7)" }}>
+                        <div className="text-center text-white">
+                          <CheckCircle className="w-8 h-8 mx-auto mb-1" />
+                          <p className="text-sm font-bold">매칭 완료</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-5">
+                    <div className="flex items-start justify-between mb-1">
+                      <h3 className="text-gray-900" style={{ fontWeight: 700, fontSize: "1.05rem" }}>
+                        {elder.name} 어르신
+                      </h3>
+                      <span
+                        className="text-xs px-2 py-0.5 rounded-full"
+                        style={difficultyStyle}
+                      >
+                        {DIFFICULTY_LABEL[elder.difficultyLevel]}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-3 text-gray-400" style={{ fontSize: "0.82rem" }}>
+                      <span>{elder.ageGroup}</span>
+                      <span>·</span>
+                      <span>{elder.gender === "FEMALE" ? "여성" : "남성"}</span>
+                    </div>
+                    <div className="flex items-center gap-1 mb-3 text-xs text-gray-400">
+                      {elder.preferredCallType === "VIDEO" ? (
+                        <Video className="w-3 h-3" />
+                      ) : (
+                        <Phone className="w-3 h-3" />
+                      )}
+                      {CALL_TYPE_LABEL[elder.preferredCallType]} 선호
+                    </div>
+                    {elder.interests && elder.interests.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-3">
+                        {elder.interests.map((tag) => (
+                          <span
+                            key={tag}
+                            className="text-xs px-2.5 py-1 rounded-full"
+                            style={{ backgroundColor: "#FFF4E6", color: "#FF8A3D", fontWeight: 600 }}
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-gray-500 mb-4" style={{ fontSize: "0.83rem", lineHeight: 1.6 }}>
+                      {elder.greetingComment}
+                    </p>
+                    <button
+                      disabled={matched}
+                      className="w-full py-2.5 rounded-2xl text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        backgroundColor: matched ? "#3DAF8A" : "#FF8A3D",
+                        fontWeight: 600,
+                        fontSize: "0.9rem",
+                      }}
+                      onClick={() => !matched && handleSelectElder(elder)}
+                    >
+                      {matched ? "매칭됨" : "매칭 신청하기"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
-
-      {/* 사전 인사말 모달 (F-15 - Ice-breaking) */}
-      <Dialog open={iceBreakingOpen} onOpenChange={setIceBreakingOpen}>
-        <DialogContent className="rounded-3xl max-w-sm border-0 shadow-2xl" aria-describedby={undefined}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <MessageSquare className="w-5 h-5" style={{ color: '#FF8A3D' }} />
-              첫인사 남기기
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            {selectedSenior && (
-              <div className="flex items-center gap-3 p-3 rounded-2xl" style={{ backgroundColor: '#FAF8F5' }}>
-                <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: '#E5E7EB' }}>
-                  <User className="w-6 h-6 text-gray-400" />
-                </div>
-                <div>
-                  <p className="font-bold text-gray-900 text-sm">{selectedSenior.name}</p>
-                  <p className="text-xs text-gray-400">{selectedSenior.ageGroup} · {selectedSenior.location}</p>
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              <p className="text-sm font-medium text-gray-700">
-                사전 인사말 <span className="text-red-400 text-xs">*필수</span>
-              </p>
-              <Textarea
-                value={iceBreakingMsg}
-                onChange={e => setIceBreakingMsg(e.target.value)}
-                placeholder="어르신께 전하고 싶은 첫인사를 남겨주세요. 예) 안녕하세요! 저는 음악을 좋아해서 같이 노래 이야기 나누고 싶어요 😊"
-                className="rounded-2xl resize-none text-sm"
-                rows={4}
-                maxLength={200}
-              />
-              <p className="text-xs text-gray-400 text-right">{iceBreakingMsg.length}/200자</p>
-            </div>
-
-            <div className="p-3 rounded-2xl text-xs text-gray-500" style={{ backgroundColor: '#E8F8F5' }}>
-              매칭은 별도 수락 절차 없이 즉시 성립됩니다. 인사말은 어르신 보호자에게 전달됩니다.
-            </div>
-
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1 rounded-2xl" onClick={() => setIceBreakingOpen(false)}>취소</Button>
-              <Button
-                className="flex-1 rounded-2xl"
-                style={{ backgroundColor: '#FF8A3D' }}
-                onClick={confirmMatch}
-              >
-                매칭 완료
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
