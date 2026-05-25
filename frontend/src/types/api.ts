@@ -65,6 +65,11 @@ export const ErrorCode = {
   YOUTH_FORBIDDEN_WORD: "Y002",
   YOUTH_PROFILE_NOT_FOUND: "Y003",
   YOUTH_PROFILE_ALREADY_EXISTS: "Y004",
+  // 매칭
+  MATCH_LIMIT_EXCEEDED: "M001",
+  DUPLICATE_MATCH: "M004",
+  ICEBREAKING_MESSAGE_REQUIRED: "M005",
+  ELDER_NOT_AVAILABLE: "M006",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -163,4 +168,65 @@ export interface MatchingElderListParams {
   difficultyLevel?: DifficultyLevel;
   availableFrom?: string;
   availableTo?: string;
+}
+
+/**
+ * 청년용 어르신 상세 응답.
+ * 백엔드 DTO: MatchingElderDetailResponse
+ * 엔드포인트: GET /api/v1/matching/elders/{elderId}
+ * - AVAILABLE 상태 어르신만 조회 가능.
+ */
+export interface MatchingElderDetailResponse {
+  elderId: string;
+  name: string;
+  ageGroup: string;
+  gender: Gender;
+  profileImageUrl: string | null;
+  greetingComment: string;
+  interests: string[] | null;
+  preferredCallType: CallType;
+  difficultyLevel: DifficultyLevel;
+  requestNotes: string | null;
+  status: ElderStatus;
+}
+
+export type MatchStatus = "MATCHED" | "IN_PROGRESS" | "TERMINATION_REQUESTED" | "ENDED";
+
+/**
+ * 매칭 생성 요청.
+ * 백엔드 DTO: MatchCreateRequest
+ * - elderId, icebreakingMessage 모두 필수.
+ */
+export interface MatchCreateRequest {
+  elderId: string;
+  icebreakingMessage: string;
+}
+
+/**
+ * 매칭 생성/단건 응답.
+ * 백엔드 DTO: MatchResponse
+ * 엔드포인트: POST /api/v1/matches
+ */
+export interface MatchResponse {
+  matchId: string;
+  youthId: string;
+  elderId: string;
+  status: MatchStatus;
+  icebreakingMessage: string;
+  selectedAt: string;
+  matchedAt: string | null;
+  endedAt: string | null;
+}
+
+/**
+ * 청년 담당 인원 제한 응답.
+ * 백엔드 DTO: YouthMatchLimitResponse
+ * 엔드포인트: GET /api/v1/matches/limit/me
+ */
+export interface YouthMatchLimitResponse {
+  youthId: string;
+  currentMatchCount: number;
+  maxMatchCount: number;
+  remainingMatchCount: number;
+  canMatch: boolean;
 }
