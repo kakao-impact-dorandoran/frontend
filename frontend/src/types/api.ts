@@ -76,6 +76,18 @@ export const ErrorCode = {
   AVAILABLE_TIME_OVERLAPPED: "AT003",
   AVAILABLE_TIME_ACCESS_DENIED: "AT004",
   INVALID_AVAILABLE_TIME_QUERY: "AT005",
+  // 일정
+  SCHEDULE_CONFLICT: "SC001",
+  SCHEDULE_NOT_FOUND: "SC002",
+  INVALID_SCHEDULE_TIME_RANGE: "SC003",
+  SCHEDULE_ACCESS_DENIED: "SC004",
+  SCHEDULE_ALREADY_CANCELED: "SC005",
+  SCHEDULE_ALREADY_COMPLETED: "SC006",
+  MATCH_NOT_SCHEDULABLE: "SC007",
+  SCHEDULE_OUT_OF_AVAILABLE_TIME: "SC008",
+  // 매칭 조회/접근
+  MATCH_NOT_FOUND: "M002",
+  MATCH_ACCESS_DENIED: "M003",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -358,4 +370,53 @@ export interface AvailableTimeResponse {
 export interface AvailableTimeCreateRequest {
   startTime: string;
   endTime: string;
+}
+
+// ---------- Schedule ----------
+/**
+ * 백엔드 enum: ScheduleStatus
+ */
+export type ScheduleStatus = "PENDING" | "CONFIRMED" | "CANCELED" | "COMPLETED";
+
+/**
+ * 일정 응답.
+ * 백엔드 DTO: ScheduleResponse
+ * 엔드포인트:
+ *  - POST  /api/v1/schedules
+ *  - GET   /api/v1/schedules/my
+ *  - PATCH /api/v1/schedules/{scheduleId}/cancel
+ *
+ * 시간은 모두 Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface ScheduleResponse {
+  scheduleId: string;
+  matchId: string;
+  youthId: string;
+  youthName: string;
+  elderId: string;
+  elderName: string;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+  status: ScheduleStatus;
+  cancelReason: string | null;
+}
+
+/**
+ * 일정 생성 요청.
+ * 백엔드 DTO: ScheduleCreateRequest
+ * - 모든 필드 필수. scheduledStartAt < scheduledEndAt.
+ */
+export interface ScheduleCreateRequest {
+  matchId: string;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+}
+
+/**
+ * 일정 취소 요청.
+ * 백엔드 DTO: ScheduleCancelRequest
+ * - cancelReason: optional, 최대 500자. body 자체 생략 가능.
+ */
+export interface ScheduleCancelRequest {
+  cancelReason?: string | null;
 }
