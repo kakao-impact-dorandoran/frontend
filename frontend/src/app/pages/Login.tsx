@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -12,20 +12,24 @@ import { routeForRole } from "../../lib/auth/routes";
 import { ApiError } from "../../lib/api/client";
 import { ErrorCode } from "../../types/api";
 
-type DemoAccountStatus = "approved" | "pending" | "suspended" | "rejected";
-
-const DEMO_ACCOUNTS: Record<string, { role: "youth" | "guardian" | "admin" | "senior"; status: DemoAccountStatus; name: string }> = {
-  "youth@demo.com":     { role: "youth",    status: "approved",  name: "김민준" },
-  "pending@demo.com":   { role: "youth",    status: "pending",   name: "이서연" },
-  "rejected@demo.com":  { role: "youth",    status: "rejected",  name: "홍길동" },
-  "suspended@demo.com": { role: "youth",    status: "suspended", name: "박지호" },
-  "guardian@demo.com":  { role: "guardian", status: "approved",  name: "최보호" },
-  "admin@demo.com":     { role: "admin",    status: "approved",  name: "관리자" },
-  "senior@demo.com":    { role: "senior",   status: "approved",  name: "박순자" },
-};
+function getSafeRedirectPath(from: unknown): string | null {
+  if (
+    typeof from === "object" &&
+    from !== null &&
+    "pathname" in from &&
+    typeof (from as { pathname?: unknown }).pathname === "string"
+  ) {
+    const pathname = (from as { pathname: string }).pathname;
+    if (pathname.startsWith("/") && !pathname.startsWith("//") && pathname !== "/login") {
+      return pathname;
+    }
+  }
+  return null;
+}
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, status, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,44 +39,22 @@ export default function Login() {
   const [rejectedDialog, setRejectedDialog] = useState(false);
   const [rejectionReason, setRejectionReason] = useState<string | null>(null);
 
-  if (status === "authenticated" && user) {
-    return <Navigate to={routeForRole(user.role, user)} replace />;
-  }
+  const redirectPath = getSafeRedirectPath(
+    (location.state as { from?: unknown } | null)?.from,
+  );
 
-  const handleDemo = (account: (typeof DEMO_ACCOUNTS)[string]) => {
-    if (account.status === "pending") {
-      setPendingDialog(true);
-      return;
-    }
-    if (account.status === "rejected") {
-      setRejectionReason(null);
-      setRejectedDialog(true);
-      return;
-    }
-    if (account.status === "suspended") {
-      setSuspendedDialog(true);
-      return;
-    }
-    if (account.role === "admin") navigate("/admin");
-    else if (account.role === "guardian") navigate("/guardian/dashboard");
-    else if (account.role === "senior") navigate("/senior");
-    else navigate("/youth");
-  };
+  if (status === "authenticated" && user) {
+    return <Navigate to={redirectPath ?? routeForRole(user.role, user)} replace />;
+  }
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
 
-    const demo = DEMO_ACCOUNTS[email];
-    if (demo) {
-      handleDemo(demo);
-      return;
-    }
-
     setSubmitting(true);
     try {
       const me = await login(email, password);
-      navigate(routeForRole(me.role, me));
+      navigate(redirectPath ?? routeForRole(me.role, me), { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === ErrorCode.YOUTH_PENDING) {
@@ -97,9 +79,8 @@ export default function Login() {
     }
   };
 
-  const handleSocialLogin = (provider: string) => {
-    console.log(`Login with ${provider}`);
-    navigate("/youth");
+  const handleSocialLogin = (_provider: string) => {
+    toast.info("소셜 로그인은 아직 준비 중입니다.");
   };
 
   return (
@@ -150,21 +131,6 @@ export default function Login() {
                 {submitting ? "로그인 중..." : "로그인"}
               </Button>
             </form>
-
-            {/* 시연용 계정 안내 */}
-            <div className="mt-4 p-3 rounded-2xl bg-gray-50 border border-gray-100">
-              <p className="text-xs text-gray-500 mb-1.5 font-medium">시연용 계정</p>
-              <div className="space-y-1 text-xs text-gray-500">
-                <p><span className="font-medium text-gray-700">youth@demo.com</span> → 청년 대시보드</p>
-                <p><span className="font-medium text-gray-700">guardian@demo.com</span> → 보호자 대시보드</p>
-                <p><span className="font-medium text-gray-700">senior@demo.com</span> → 어르신 태블릿 화면</p>
-                <p><span className="font-medium text-gray-700">admin@demo.com</span> → 관리자 페이지</p>
-                <p><span className="font-medium text-gray-700">pending@demo.com</span> → 승인 대기 팝업</p>
-                <p><span className="font-medium text-gray-700">rejected@demo.com</span> → 반려 안내 팝업</p>
-                <p><span className="font-medium text-gray-700">suspended@demo.com</span> → 제재 안내 팝업</p>
-                <p className="text-gray-400">(비밀번호 임의 입력 후 로그인)</p>
-              </div>
-            </div>
 
             <div className="relative my-6">
               <div className="absolute inset-0 flex items-center">
