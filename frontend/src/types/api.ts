@@ -126,3 +126,41 @@ export interface YouthProfileUpdateRequest {
   greetingComment?: string | null;
   voiceSampleUrl?: string | null;
 }
+
+// ---------- Elder / Matching ----------
+export type Gender = "MALE" | "FEMALE";
+export type CallType = "VIDEO" | "AUDIO";
+export type DifficultyLevel = "LOW" | "MEDIUM" | "HIGH";
+export type ElderStatus = "AVAILABLE" | "MATCHED" | "INACTIVE";
+
+/**
+ * 청년용 매칭 가능 어르신 목록 응답.
+ * 백엔드 DTO: MatchingElderListResponse
+ * 엔드포인트: GET /api/v1/matching/elders
+ * - 주소/연락처 등 민감정보는 응답에 포함되지 않음.
+ */
+export interface MatchingElderListResponse {
+  elderId: string;
+  name: string;
+  ageGroup: string;
+  gender: Gender;
+  profileImageUrl: string | null;
+  greetingComment: string;
+  interests: string[] | null;
+  preferredCallType: CallType;
+  difficultyLevel: DifficultyLevel;
+  status: ElderStatus;
+}
+
+/**
+ * GET /api/v1/matching/elders query parameter.
+ * - availableFrom/availableTo 는 둘 다 지정해야 시간 범위 필터가 적용됨.
+ * - 시각은 Asia/Seoul 기준 wall clock (ISO-8601, 타임존 suffix 금지).
+ */
+export interface MatchingElderListParams {
+  interest?: string;
+  preferredCallType?: CallType;
+  difficultyLevel?: DifficultyLevel;
+  availableFrom?: string;
+  availableTo?: string;
+}
