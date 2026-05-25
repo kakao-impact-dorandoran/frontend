@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+.vite/
+
+# Environment files (실제 시크릿)
+.env
+.env.local
+.env.*.local
+
+# 단, 다음은 추적 허용
+!.env.example
+!.env.development
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage / cache
+coverage/
+.cache/

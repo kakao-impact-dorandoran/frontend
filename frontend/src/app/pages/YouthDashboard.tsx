@@ -3,15 +3,20 @@ import { useState, useRef } from "react";
 import { Heart, User, Users, Calendar, LogOut, MessageCircle, Bell, ChevronRight, Clock, Award, Phone, Pencil } from "lucide-react";
 import { NotificationPanel } from "../components/NotificationPanel";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { useAuth } from "../../lib/auth/AuthContext";
 
 export default function YouthDashboard() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [notifOpen, setNotifOpen] = useState(false);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
   const bellRef = useRef<HTMLButtonElement>(null);
   const unreadCount = 2;
 
-  const handleLogout = () => navigate("/");
+  const handleLogout = () => {
+    logout();
+    navigate("/");
+  };
 
   const upcomingSchedules: { name: string; time: string; type: string }[] = [];
 
