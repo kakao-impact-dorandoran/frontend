@@ -7,7 +7,8 @@ import { useAuth } from "../../lib/auth/AuthContext";
 
 export default function YouthDashboard() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const displayName = user?.name ?? "청년";
   const [notifOpen, setNotifOpen] = useState(false);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
   const bellRef = useRef<HTMLButtonElement>(null);
@@ -68,7 +69,7 @@ export default function YouthDashboard() {
           <div className="relative z-10">
             <div className="flex items-start justify-between">
               <div>
-                <h1 className="text-white mb-1" style={{ fontSize: '1.6rem', fontWeight: 700 }}>최윤정님 반가워요! 👋</h1>
+                <h1 className="text-white mb-1" style={{ fontSize: '1.6rem', fontWeight: 700 }}>{displayName}님 반가워요! 👋</h1>
                 <p className="text-white/80 text-sm">따뜻한 대화로 마음을 잇는 시간</p>
               </div>
               <Link to="/youth/myinfo">
