@@ -151,11 +151,12 @@ export default function Login() {
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">이메일</Label>
+                <Label htmlFor="email">아이디 / 이메일</Label>
                 <Input
                   id="email"
-                  type="email"
-                  placeholder="example@email.com"
+                  type="text"
+                  autoComplete="username"
+                  placeholder="아이디 또는 example@email.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
