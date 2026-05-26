@@ -22,6 +22,7 @@ import {
 } from "../../lib/api/availableTime";
 import { getMySchedules } from "../../lib/api/schedule";
 import { getActivityRecords } from "../../lib/api/activityRecord";
+import { createReport } from "../../lib/api/report";
 import type {
   ActivityRecordSummaryResponse,
   AvailableTimeResponse,
@@ -31,6 +32,7 @@ import type {
   MatchDetailResponse,
   MatchStatus,
   MatchSummaryResponse,
+  ReportType,
   ScheduleResponse,
   ScheduleStatus,
 } from "../../types/api";
@@ -218,6 +220,35 @@ function resolveTerminationRequestError(err: unknown): string {
 }
 
 const TERMINATION_REASON_MAX = 500;
+const REPORT_CONTENT_MAX = 500;
+
+const REPORT_TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
+  { value: "INAPPROPRIATE_LANGUAGE", label: "부적절한 언행" },
+  { value: "HARASSMENT",             label: "괴롭힘" },
+  { value: "NO_SHOW",                label: "약속 불이행" },
+  { value: "DEVICE_PROBLEM",         label: "기기 문제" },
+  { value: "ETC",                    label: "기타" },
+];
+
+function resolveReportCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.REPORT_ACCESS_DENIED:
+        return "이 매칭에 대한 신고 권한이 없습니다.";
+      case ErrorCode.MATCH_NOT_FOUND:
+        return "매칭 정보를 찾을 수 없습니다.";
+      case ErrorCode.INVALID_INPUT:
+        return "신고 내용을 입력해 주세요.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return err.message || "신고 권한이 없습니다.";
+    if (err.status === 404) return "신고 대상을 찾을 수 없습니다.";
+    return err.message || "신고를 접수하지 못했습니다.";
+  }
+  return "신고를 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
 
 function resolveAvailCreateError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -289,11 +320,13 @@ export default function GuardianDashboard() {
   const [terminationSubmitting, setTerminationSubmitting] = useState(false);
   const [terminationError, setTerminationError] = useState<string | null>(null);
 
-  // F-31 신고하기 (후속 API 미연결 — placeholder)
+  // FE-5J 신고하기 (POST /api/v1/reports 연동)
   const [reportOpen, setReportOpen] = useState(false);
   const [reportTarget, setReportTarget] = useState<ElderResponse | null>(null);
-  const [reportType, setReportType] = useState("부적절한 언행");
+  const [reportType, setReportType] = useState<ReportType>("INAPPROPRIATE_LANGUAGE");
   const [reportContent, setReportContent] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const [journalDialogOpen, setJournalDialogOpen] = useState(false);
   const [journalYear, setJournalYear] = useState<string | null>(null);
@@ -301,14 +334,19 @@ export default function GuardianDashboard() {
 
   const openReport = (elder: ElderResponse) => {
     setReportTarget(elder);
-    setReportType("부적절한 언행");
+    setReportType("INAPPROPRIATE_LANGUAGE");
     setReportContent("");
+    setReportError(null);
+    setReportSubmitting(false);
     setReportOpen(true);
   };
-  const handleSubmitReport = () => {
-    if (!reportContent.trim()) { toast.error("신고 내용을 입력해주세요."); return; }
-    toast.message("신고 접수는 다음 단계에서 연결 예정입니다.");
+  const closeReport = () => {
     setReportOpen(false);
+    setReportTarget(null);
+    setReportType("INAPPROPRIATE_LANGUAGE");
+    setReportContent("");
+    setReportError(null);
+    setReportSubmitting(false);
   };
 
   const loadElders = useCallback(async () => {
@@ -594,6 +632,36 @@ export default function GuardianDashboard() {
     activeMatchSummary,
     fetchMatchDetail,
   ]);
+
+  const handleSubmitReport = useCallback(async () => {
+    if (!reportTarget) return;
+    const content = reportContent.trim();
+    if (!content) {
+      setReportError("신고 내용을 입력해 주세요.");
+      return;
+    }
+    setReportSubmitting(true);
+    setReportError(null);
+    try {
+      const activeMatch = matches.find(
+        (m) => m.elderId === reportTarget.elderId && m.status !== "ENDED",
+      ) ?? matches.find((m) => m.elderId === reportTarget.elderId) ?? null;
+      await createReport({
+        matchId: activeMatch?.matchId ?? null,
+        targetElderId: reportTarget.elderId,
+        targetUserId: activeMatch?.youthId ?? null,
+        reportType,
+        content,
+      });
+      toast.success("신고가 접수되었습니다.");
+      closeReport();
+    } catch (err) {
+      const message = resolveReportCreateError(err);
+      setReportError(message);
+      toast.error(message);
+      setReportSubmitting(false);
+    }
+  }, [reportTarget, reportContent, reportType, matches]);
 
   const handleSubmitAvail = async () => {
     if (!user) {
@@ -1374,8 +1442,13 @@ export default function GuardianDashboard() {
         </div>
       </div>
 
-      {/* F-31 신고하기 다이얼로그 (placeholder — 신고 API 미연결) */}
-      <Dialog open={reportOpen} onOpenChange={setReportOpen}>
+      {/* FE-5J 신고하기 다이얼로그 (POST /api/v1/reports) */}
+      <Dialog
+        open={reportOpen}
+        onOpenChange={(open) => {
+          if (!open && !reportSubmitting) closeReport();
+        }}
+      >
         <DialogContent className="max-w-sm rounded-3xl border-0 shadow-2xl" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -1387,36 +1460,75 @@ export default function GuardianDashboard() {
             <div className="space-y-1.5">
               <p className="text-sm font-medium text-gray-700">신고 유형</p>
               <div className="grid grid-cols-2 gap-2">
-                {["부적절한 언행", "약속 불이행", "개인정보 요구", "기타"].map(t => (
-                  <button
-                    key={t}
-                    onClick={() => setReportType(t)}
-                    className="py-2 rounded-2xl text-xs border-2 transition-colors"
-                    style={{
-                      borderColor: reportType === t ? '#EF4444' : '#E5E7EB',
-                      backgroundColor: reportType === t ? '#FEF2F2' : 'white',
-                      color: reportType === t ? '#EF4444' : '#6B7280',
-                      fontWeight: reportType === t ? 600 : 400,
-                    }}
-                  >{t}</button>
-                ))}
+                {REPORT_TYPE_OPTIONS.map((opt) => {
+                  const active = reportType === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setReportType(opt.value)}
+                      disabled={reportSubmitting}
+                      className="py-2 rounded-2xl text-xs border-2 transition-colors disabled:opacity-60"
+                      style={{
+                        borderColor: active ? '#EF4444' : '#E5E7EB',
+                        backgroundColor: active ? '#FEF2F2' : 'white',
+                        color: active ? '#EF4444' : '#6B7280',
+                        fontWeight: active ? 600 : 400,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <div className="space-y-1.5">
               <p className="text-sm font-medium text-gray-700">신고 내용</p>
               <textarea
                 value={reportContent}
-                onChange={e => setReportContent(e.target.value.slice(0, 500))}
+                onChange={(e) => {
+                  setReportContent(e.target.value.slice(0, REPORT_CONTENT_MAX));
+                  if (reportError) setReportError(null);
+                }}
+                disabled={reportSubmitting}
                 rows={4}
                 placeholder="불편했던 상황을 구체적으로 적어주세요."
-                className="w-full px-3 py-2 border border-gray-200 rounded-2xl text-sm resize-none focus:outline-none focus:border-red-300"
+                className="w-full px-3 py-2 border border-gray-200 rounded-2xl text-sm resize-none focus:outline-none focus:border-red-300 disabled:bg-gray-50"
               />
-              <p className="text-right text-xs text-gray-400">{reportContent.length} / 500자</p>
+              <p className="text-right text-xs text-gray-400">
+                {reportContent.length} / {REPORT_CONTENT_MAX}자
+              </p>
             </div>
+
+            {reportError && (
+              <div className="rounded-2xl p-3" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{reportError}</p>
+              </div>
+            )}
+
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1 rounded-2xl" onClick={() => setReportOpen(false)}>취소</Button>
-              <Button className="flex-1 rounded-2xl" style={{ backgroundColor: '#EF4444' }} onClick={handleSubmitReport}>
-                신고 접수
+              <Button
+                variant="outline"
+                className="flex-1 rounded-2xl"
+                onClick={closeReport}
+                disabled={reportSubmitting}
+              >
+                취소
+              </Button>
+              <Button
+                className="flex-1 rounded-2xl text-white"
+                style={{ backgroundColor: '#EF4444' }}
+                onClick={() => void handleSubmitReport()}
+                disabled={reportSubmitting || !reportContent.trim()}
+              >
+                {reportSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                    접수 중...
+                  </>
+                ) : (
+                  "신고 접수"
+                )}
               </Button>
             </div>
           </div>

@@ -25,10 +25,16 @@ import {
   processAdminHelpRequest,
   processAdminMatchTerminationRequest,
 } from "../../lib/api/admin";
+import {
+  getAdminReports,
+  processAdminReport,
+} from "../../lib/api/report";
 import type {
   AdminHelpRequestResponse,
   AdminMatchTerminationResponse,
+  AdminReportResponse,
   HelpRequestType,
+  ReportType,
 } from "../../types/api";
 import { ErrorCode } from "../../types/api";
 
@@ -111,6 +117,14 @@ const HELP_REQUEST_TYPE_LABEL: Record<HelpRequestType, string> = {
   ETC:         "기타 문의",
 };
 
+const REPORT_TYPE_LABEL: Record<ReportType, string> = {
+  INAPPROPRIATE_LANGUAGE: "부적절한 언행",
+  HARASSMENT:             "괴롭힘",
+  NO_SHOW:                "약속 불이행",
+  DEVICE_PROBLEM:         "기기 문제",
+  ETC:                    "기타",
+};
+
 const ADMIN_DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
   year: "numeric",
   month: "long",
@@ -190,6 +204,36 @@ function resolveTerminationProcessError(err: unknown): string {
   return "매칭 중단 요청 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
+function resolveReportListError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    return err.message || "신고 목록을 불러오지 못했습니다.";
+  }
+  return "신고 목록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+function resolveReportProcessError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.REPORT_NOT_FOUND:
+        return "신고를 찾을 수 없습니다.";
+      case ErrorCode.INVALID_REPORT_STATUS:
+        return "이미 처리된 신고입니다.";
+      case ErrorCode.REPORT_ACCESS_DENIED:
+        return "관리자 권한이 필요합니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    if (err.status === 404) return "신고를 찾을 수 없습니다.";
+    if (err.status === 400 || err.status === 409) return "이미 처리된 신고입니다.";
+    return err.message || "신고 처리에 실패했습니다.";
+  }
+  return "신고 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 const ADMIN_MEMO_MAX = 500;
 
 export default function AdminDashboard() {
@@ -215,6 +259,16 @@ export default function AdminDashboard() {
     decision: "APPROVED" | "REJECTED";
   } | null>(null);
   const [terminationMemo, setTerminationMemo] = useState("");
+
+  const [reports, setReports] = useState<AdminReportResponse[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportProcessingId, setReportProcessingId] = useState<string | null>(null);
+  const [reportDecisionTarget, setReportDecisionTarget] = useState<{
+    report: AdminReportResponse;
+    decision: "RESOLVED" | "REJECTED";
+  } | null>(null);
+  const [reportMemo, setReportMemo] = useState("");
 
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [selectedYouth, setSelectedYouth] = useState<typeof pendingYouths[0] | null>(null);
@@ -254,10 +308,25 @@ export default function AdminDashboard() {
     }
   }, []);
 
+  const loadReports = useCallback(async () => {
+    setReportLoading(true);
+    setReportError(null);
+    try {
+      const list = await getAdminReports("PENDING");
+      setReports(list ?? []);
+    } catch (err) {
+      setReports([]);
+      setReportError(resolveReportListError(err));
+    } finally {
+      setReportLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadHelpRequests();
     void loadTerminationRequests();
-  }, [loadHelpRequests, loadTerminationRequests]);
+    void loadReports();
+  }, [loadHelpRequests, loadTerminationRequests, loadReports]);
 
   const submitHelpRequestHandle = useCallback(
     async (target: AdminHelpRequestResponse) => {
@@ -317,6 +386,47 @@ export default function AdminDashboard() {
     }
   }, [terminationDecisionTarget, terminationMemo, loadTerminationRequests]);
 
+  const openReportDecision = (
+    report: AdminReportResponse,
+    decision: "RESOLVED" | "REJECTED",
+  ) => {
+    setReportDecisionTarget({ report, decision });
+    setReportMemo("");
+  };
+
+  const closeReportDecision = () => {
+    setReportDecisionTarget(null);
+    setReportMemo("");
+  };
+
+  const submitReportDecision = useCallback(async () => {
+    if (!reportDecisionTarget) return;
+    const { report, decision } = reportDecisionTarget;
+    if (decision === "REJECTED" && !reportMemo.trim()) {
+      toast.error("반려 사유를 입력해 주세요.");
+      return;
+    }
+    const memo = reportMemo.trim();
+    setReportProcessingId(report.reportId);
+    try {
+      await processAdminReport(report.reportId, {
+        status: decision,
+        adminMemo: memo.length > 0 ? memo : null,
+      });
+      toast.success(
+        decision === "RESOLVED"
+          ? "신고가 해결됨으로 처리되었습니다."
+          : "신고가 반려 처리되었습니다.",
+      );
+      closeReportDecision();
+      await loadReports();
+    } catch (err) {
+      toast.error(resolveReportProcessError(err));
+    } finally {
+      setReportProcessingId(null);
+    }
+  }, [reportDecisionTarget, reportMemo, loadReports]);
+
   const handleApprove = (id: string) => {
     setYouths((prev) => prev.map((y) => (y.id === id ? { ...y, status: "APPROVED" } : y)));
     toast.message("청년 가입 검수는 다음 단계에서 연결 예정입니다.");
@@ -355,7 +465,9 @@ export default function AdminDashboard() {
 
   const pendingHelpCount = helpRequests.length;
   const pendingTerminationCount = terminationRequests.length;
-  const pendingOpsCount = pendingHelpCount + pendingTerminationCount;
+  const pendingReportCount = reports.length;
+  const pendingOpsCount =
+    pendingHelpCount + pendingTerminationCount + pendingReportCount;
 
   const MENU_ITEMS: { key: MenuKey; label: string; icon: React.ReactNode; count?: number }[] = useMemo(
     () => [
@@ -443,11 +555,13 @@ export default function AdminDashboard() {
                   <p className="text-xs text-gray-500">대기 중 매칭 중단 요청</p>
                 </div>
                 <div className="bg-white rounded-2xl p-5 shadow-sm">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ backgroundColor: "#EBF4FF", color: "#3D7AFF" }}>
-                    <GitMerge className="w-6 h-6" />
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ backgroundColor: "#FEF2F2", color: "#EF4444" }}>
+                    <Flag className="w-6 h-6" />
                   </div>
-                  <p className="text-3xl font-bold text-gray-900 mb-1">{matchings.filter((m) => m.status === "IN_PROGRESS").length}</p>
-                  <p className="text-xs text-gray-500">진행 중 매칭 (mock)</p>
+                  <p className="text-3xl font-bold text-gray-900 mb-1">
+                    {reportLoading ? <Loader2 className="w-6 h-6 animate-spin text-gray-300" /> : pendingReportCount}
+                  </p>
+                  <p className="text-xs text-gray-500">대기 중 신고</p>
                 </div>
               </div>
 
@@ -520,6 +634,47 @@ export default function AdminDashboard() {
                             {r.youthName} ↔ {r.elderName}
                           </p>
                           <p className="text-xs text-gray-500 truncate">{r.reason}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{formatLocalDateTime(r.createdAt)}</p>
+                        </div>
+                        <StatusBadge status={r.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white rounded-3xl p-6 shadow-sm mt-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <h2 className="font-bold text-gray-900">대기 중인 신고</h2>
+                    {reportLoading && <Loader2 className="w-4 h-4 animate-spin text-gray-400" />}
+                  </div>
+                  <button
+                    onClick={() => setActive("operations")}
+                    className="text-sm flex items-center gap-1"
+                    style={{ color: "#FF8A3D" }}
+                  >
+                    전체 보기 <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+                {reportError ? (
+                  <div className="text-sm text-red-500 py-4">
+                    {reportError}
+                    <button onClick={() => void loadReports()} className="ml-2 underline">다시 시도</button>
+                  </div>
+                ) : reports.length === 0 && !reportLoading ? (
+                  <p className="text-sm text-gray-400 py-4">대기 중인 신고가 없습니다.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {reports.slice(0, 3).map((r) => (
+                      <div key={r.reportId} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900 text-sm truncate">
+                            {r.reporterUserName ?? "익명"} → {r.targetUserName ?? r.targetElderName ?? "대상 미지정"}
+                          </p>
+                          <p className="text-xs text-gray-500 truncate">
+                            [{REPORT_TYPE_LABEL[r.reportType]}] {r.content}
+                          </p>
                           <p className="text-xs text-gray-400 mt-0.5">{formatLocalDateTime(r.createdAt)}</p>
                         </div>
                         <StatusBadge status={r.status} />
@@ -674,10 +829,15 @@ export default function AdminDashboard() {
                   onClick={() => {
                     void loadHelpRequests();
                     void loadTerminationRequests();
+                    void loadReports();
                   }}
-                  disabled={helpLoading || terminationLoading}
+                  disabled={helpLoading || terminationLoading || reportLoading}
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 mr-1 ${helpLoading || terminationLoading ? "animate-spin" : ""}`} />
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 mr-1 ${
+                      helpLoading || terminationLoading || reportLoading ? "animate-spin" : ""
+                    }`}
+                  />
                   새로고침
                 </Button>
               </div>
@@ -829,6 +989,97 @@ export default function AdminDashboard() {
                               ) : (
                                 <>
                                   <CheckCircle className="w-3.5 h-3.5 mr-1" /> 승인
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              {/* 신고 큐 (FE-5J) */}
+              <section className="mt-8">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Flag className="w-4 h-4 text-red-500" />
+                    <h2 className="font-bold text-gray-900">신고 (PENDING)</h2>
+                    <span className="text-xs text-gray-500">총 {pendingReportCount}건</span>
+                  </div>
+                </div>
+                {reportLoading ? (
+                  <div className="bg-white rounded-2xl p-8 shadow-sm flex items-center justify-center text-gray-400 gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" /> 불러오는 중입니다...
+                  </div>
+                ) : reportError ? (
+                  <div className="bg-white rounded-2xl p-6 shadow-sm">
+                    <p className="text-sm text-red-500 mb-3">{reportError}</p>
+                    <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void loadReports()}>
+                      다시 시도
+                    </Button>
+                  </div>
+                ) : reports.length === 0 ? (
+                  <div className="bg-white rounded-2xl p-8 shadow-sm text-center text-gray-400">
+                    대기 중인 신고가 없습니다.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {reports.map((r) => {
+                      const processing = reportProcessingId === r.reportId;
+                      return (
+                        <div key={r.reportId} className="bg-white rounded-2xl p-5 shadow-sm">
+                          <div className="flex items-start justify-between gap-4 mb-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className="font-bold text-gray-900">
+                                  {r.reporterUserName ?? "익명 신고자"}
+                                </span>
+                                <span className="text-gray-400 text-sm">→</span>
+                                <span className="font-bold text-gray-900">
+                                  {r.targetUserName ?? r.targetElderName ?? "대상 미지정"}
+                                </span>
+                                <Badge variant="outline" className="text-xs rounded-full">
+                                  {REPORT_TYPE_LABEL[r.reportType]}
+                                </Badge>
+                                <StatusBadge status={r.status} />
+                              </div>
+                              <p className="text-xs text-gray-400">
+                                매칭 ID: {r.matchId ? r.matchId.slice(0, 8) : "없음"}
+                                {" · "}
+                                신고 시각: {formatLocalDateTime(r.createdAt)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 rounded-2xl px-4 py-3 mb-3">
+                            <p className="text-xs text-gray-500 mb-1">신고 내용</p>
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                              {r.content}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1 rounded-xl border-red-200 text-red-500 hover:bg-red-50"
+                              disabled={processing || r.status !== "PENDING"}
+                              onClick={() => openReportDecision(r, "REJECTED")}
+                            >
+                              <XCircle className="w-3.5 h-3.5 mr-1" /> 반려
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="flex-1 rounded-xl text-white"
+                              style={{ backgroundColor: "#3DAF8A" }}
+                              disabled={processing || r.status !== "PENDING"}
+                              onClick={() => openReportDecision(r, "RESOLVED")}
+                            >
+                              {processing ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <>
+                                  <CheckCircle className="w-3.5 h-3.5 mr-1" /> 해결됨
                                 </>
                               )}
                             </Button>
@@ -1141,6 +1392,98 @@ export default function AdminDashboard() {
                   ) : terminationDecisionTarget.decision === "APPROVED" ? (
                     <>
                       <CheckCircle className="w-4 h-4 mr-1" /> 승인
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4 mr-1" /> 반려
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* 신고 처리 다이얼로그 (FE-5J) */}
+      <Dialog
+        open={reportDecisionTarget !== null}
+        onOpenChange={(o) => {
+          if (!o && !reportProcessingId) closeReportDecision();
+        }}
+      >
+        <DialogContent className="rounded-3xl max-w-sm border-0 shadow-2xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>
+              {reportDecisionTarget?.decision === "RESOLVED"
+                ? "신고 해결 처리"
+                : "신고 반려 처리"}
+            </DialogTitle>
+          </DialogHeader>
+          {reportDecisionTarget && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl" style={{ backgroundColor: "#FAF8F5" }}>
+                <p className="text-sm text-gray-700 font-medium">
+                  {reportDecisionTarget.report.reporterUserName ?? "익명 신고자"} →{" "}
+                  {reportDecisionTarget.report.targetUserName ??
+                    reportDecisionTarget.report.targetElderName ??
+                    "대상 미지정"}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  유형: {REPORT_TYPE_LABEL[reportDecisionTarget.report.reportType]}
+                </p>
+                <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap break-words">
+                  {reportDecisionTarget.report.content}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">
+                  관리자 메모{" "}
+                  {reportDecisionTarget.decision === "REJECTED" ? (
+                    <span className="text-red-400">*필수</span>
+                  ) : (
+                    <span className="text-gray-400">(선택)</span>
+                  )}
+                </p>
+                <Textarea
+                  value={reportMemo}
+                  onChange={(e) => setReportMemo(e.target.value.slice(0, ADMIN_MEMO_MAX))}
+                  placeholder={
+                    reportDecisionTarget.decision === "RESOLVED"
+                      ? "예: 양측 가이드 안내 완료"
+                      : "반려 사유를 입력해 주세요"
+                  }
+                  className="rounded-2xl resize-none text-sm"
+                  rows={3}
+                  disabled={reportProcessingId !== null}
+                />
+                <p className="text-xs text-gray-400 text-right">
+                  {reportMemo.length} / {ADMIN_MEMO_MAX}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  className="flex-1 rounded-2xl"
+                  onClick={closeReportDecision}
+                  disabled={reportProcessingId !== null}
+                >
+                  취소
+                </Button>
+                <Button
+                  className="flex-1 rounded-2xl text-white"
+                  style={{
+                    backgroundColor:
+                      reportDecisionTarget.decision === "RESOLVED" ? "#3DAF8A" : "#EF4444",
+                  }}
+                  onClick={submitReportDecision}
+                  disabled={reportProcessingId !== null}
+                >
+                  {reportProcessingId ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : reportDecisionTarget.decision === "RESOLVED" ? (
+                    <>
+                      <CheckCircle className="w-4 h-4 mr-1" /> 해결됨
                     </>
                   ) : (
                     <>
