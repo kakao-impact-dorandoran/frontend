@@ -5,12 +5,51 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Heart, Clock, Ban, XCircle } from "lucide-react";
+import { Heart, Clock, Ban, XCircle, User, Shield, UserCog } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth/AuthContext";
 import { routeForRole } from "../../lib/auth/routes";
 import { ApiError } from "../../lib/api/client";
 import { ErrorCode } from "../../types/api";
+
+type DemoAccount = {
+  key: "youth" | "guardian" | "admin";
+  roleLabel: string;
+  description: string;
+  id: string;
+  password: string;
+  Icon: typeof User;
+};
+
+const SHOW_DEMO_ACCOUNTS =
+  import.meta.env.VITE_SHOW_DEMO_ACCOUNTS === "true";
+
+const DEMO_ACCOUNT_LIST: DemoAccount[] = [
+  {
+    key: "youth",
+    roleLabel: "청년",
+    description: "승인 완료된 청년 계정. 매칭/일정/통화 데모용.",
+    id: import.meta.env.VITE_DEMO_YOUTH_ID || "youth_approved",
+    password: import.meta.env.VITE_DEMO_YOUTH_PASSWORD || "",
+    Icon: User,
+  },
+  {
+    key: "guardian",
+    roleLabel: "보호자",
+    description: "보호자 대시보드 / 어르신 관리 데모용.",
+    id: import.meta.env.VITE_DEMO_GUARDIAN_ID || "guardian",
+    password: import.meta.env.VITE_DEMO_GUARDIAN_PASSWORD || "",
+    Icon: Shield,
+  },
+  {
+    key: "admin",
+    roleLabel: "관리자",
+    description: "관리자 운영 큐 / 승인·제재 데모용.",
+    id: import.meta.env.VITE_DEMO_ADMIN_ID || "admin",
+    password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD || "",
+    Icon: UserCog,
+  },
+];
 
 function getSafeRedirectPath(from: unknown): string | null {
   if (
@@ -81,6 +120,19 @@ export default function Login() {
 
   const handleSocialLogin = (_provider: string) => {
     toast.info("소셜 로그인은 아직 준비 중입니다.");
+  };
+
+  const handleFillDemoAccount = (account: DemoAccount) => {
+    setEmail(account.id);
+    if (account.password) {
+      setPassword(account.password);
+      toast.success(`${account.roleLabel} 시연 계정을 입력했습니다.`);
+    } else {
+      setPassword("");
+      toast.info(
+        `${account.roleLabel} ID만 채웠습니다. 비밀번호는 직접 입력해주세요. (환경변수 미설정)`,
+      );
+    }
   };
 
   return (
@@ -173,6 +225,69 @@ export default function Login() {
             </div>
           </CardContent>
         </Card>
+
+        {SHOW_DEMO_ACCOUNTS && (
+          <Card className="mt-4 rounded-3xl border-0 shadow-md">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">시연용 계정</CardTitle>
+              <CardDescription className="text-xs">
+                아래 카드의 “입력하기”를 누르면 로그인 폼에 값이 채워집니다.
+                실제 로그인은 위 로그인 버튼을 눌러 진행하세요.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {DEMO_ACCOUNT_LIST.map((account) => {
+                const { Icon } = account;
+                const hasPassword = Boolean(account.password);
+                return (
+                  <div
+                    key={account.key}
+                    className="flex items-start gap-3 rounded-2xl p-3"
+                    style={{ backgroundColor: "#FFF8F0", border: "1px solid #FFE8D6" }}
+                  >
+                    <div
+                      className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: "#FFE8D6" }}
+                    >
+                      <Icon className="w-4 h-4" style={{ color: "#FF8A3D" }} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">
+                          {account.roleLabel}
+                        </span>
+                        <span className="text-xs text-gray-500 truncate">
+                          {account.id}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {account.description}
+                      </p>
+                      {!hasPassword && (
+                        <p className="text-[11px] text-gray-400 mt-0.5">
+                          비밀번호 환경변수 미설정 — 수동 입력 필요
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-xl shrink-0"
+                      onClick={() => handleFillDemoAccount(account)}
+                    >
+                      입력하기
+                    </Button>
+                  </div>
+                );
+              })}
+              <p className="text-[11px] text-gray-400 pt-1">
+                실제 비밀번호는 <code>.env.development.local</code> 에만 보관하세요.
+                코드/저장소에는 커밋하지 않습니다.
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* 승인 대기 팝업 (F-03) */}
