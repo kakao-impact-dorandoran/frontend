@@ -1,9 +1,52 @@
 import { Link, useNavigate } from "react-router";
-import { useState, useRef } from "react";
-import { Heart, User, Users, Calendar, LogOut, MessageCircle, Bell, ChevronRight, Clock, Award, Phone, Pencil } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Heart, User, Users, Calendar, LogOut, MessageCircle, Bell, ChevronRight,
+  Clock, Award, Phone, Pencil,
+} from "lucide-react";
 import { NotificationPanel } from "../components/NotificationPanel";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { useAuth } from "../../lib/auth/AuthContext";
+import { ApiError } from "../../lib/api/client";
+import {
+  getActivityRecords,
+  getMyVolunteerStats,
+} from "../../lib/api/activityRecord";
+import { getMyMatches } from "../../lib/api/matching";
+import { getMySchedules } from "../../lib/api/schedule";
+import type {
+  ActivityRecordSummaryResponse,
+  MatchSummaryResponse,
+  ScheduleResponse,
+  YouthVolunteerStatsResponse,
+} from "../../types/api";
+import { toast } from "sonner";
+
+function splitLocalDateTime(value: string): { date: string; time: string } {
+  const [date = "", rest = ""] = value.split("T");
+  return { date, time: rest.slice(0, 5) };
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+const SCHEDULE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  month: "long",
+  day: "numeric",
+});
+
+function formatScheduleTime(s: ScheduleResponse): string {
+  const { date, time: start } = splitLocalDateTime(s.scheduledStartAt);
+  const { time: end } = splitLocalDateTime(s.scheduledEndAt);
+  const [y, m, d] = date.split("-").map((n) => Number(n));
+  if (!y || !m || !d) return `${date} ${start} ~ ${end}`;
+  return `${SCHEDULE_FORMATTER.format(new Date(y, m - 1, d))} ${start} ~ ${end}`;
+}
+
+function isSilentApiError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403);
+}
 
 export default function YouthDashboard() {
   const navigate = useNavigate();
@@ -14,12 +57,136 @@ export default function YouthDashboard() {
   const bellRef = useRef<HTMLButtonElement>(null);
   const unreadCount = 2;
 
+  const [stats, setStats] = useState<YouthVolunteerStatsResponse | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  const [matches, setMatches] = useState<MatchSummaryResponse[]>([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+
+  const [activityRecords, setActivityRecords] = useState<ActivityRecordSummaryResponse[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+
+  const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
+  const [schedulesLoading, setSchedulesLoading] = useState(false);
+
   const handleLogout = () => {
     logout();
     navigate("/");
   };
 
-  const upcomingSchedules: { name: string; time: string; type: string }[] = [];
+  const loadStats = useCallback(async () => {
+    if (!user) return;
+    setStatsLoading(true);
+    try {
+      const data = await getMyVolunteerStats();
+      setStats(data);
+    } catch (err) {
+      setStats(null);
+      if (!isSilentApiError(err)) {
+        toast.error("누적 활동 통계를 불러오지 못했습니다.");
+      }
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [user]);
+
+  const loadMatches = useCallback(async () => {
+    if (!user) return;
+    setMatchesLoading(true);
+    try {
+      const list = await getMyMatches();
+      setMatches(list ?? []);
+    } catch {
+      setMatches([]);
+    } finally {
+      setMatchesLoading(false);
+    }
+  }, [user]);
+
+  const loadActivityRecords = useCallback(async () => {
+    if (!user) return;
+    setActivityLoading(true);
+    try {
+      const list = await getActivityRecords();
+      setActivityRecords(list ?? []);
+    } catch {
+      setActivityRecords([]);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [user]);
+
+  const loadSchedules = useCallback(async () => {
+    if (!user) return;
+    setSchedulesLoading(true);
+    try {
+      const list = await getMySchedules();
+      setSchedules(list ?? []);
+    } catch {
+      setSchedules([]);
+    } finally {
+      setSchedulesLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => { void loadStats(); }, [loadStats]);
+  useEffect(() => { void loadMatches(); }, [loadMatches]);
+  useEffect(() => { void loadActivityRecords(); }, [loadActivityRecords]);
+  useEffect(() => { void loadSchedules(); }, [loadSchedules]);
+
+  const currentMonthKey = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
+  }, []);
+
+  const thisMonthConversationCount = useMemo(() => {
+    return activityRecords.filter((r) => {
+      const base = r.actualStartAt ?? r.createdAt;
+      return base.startsWith(currentMonthKey);
+    }).length;
+  }, [activityRecords, currentMonthKey]);
+
+  const activeSeniorCount = useMemo(() => {
+    const elderIds = new Set<string>();
+    for (const m of matches) {
+      if (m.status === "MATCHED" || m.status === "IN_PROGRESS") {
+        elderIds.add(m.elderId);
+      }
+    }
+    return elderIds.size;
+  }, [matches]);
+
+  const totalMinutesText = stats != null
+    ? `${stats.totalDurationMinutes}분`
+    : (statsLoading ? "..." : "0분");
+  const totalCertifiedHoursText = stats != null
+    ? `${stats.totalCertifiedHours}시간`
+    : (statsLoading ? "..." : "0시간");
+  const availableCertificateHoursText = stats != null
+    ? `${stats.availableCertificateHours}시간`
+    : (statsLoading ? "..." : "0시간");
+  const thisMonthCountText = activityLoading && activityRecords.length === 0
+    ? "..."
+    : `${thisMonthConversationCount}회`;
+  const activeSeniorCountText = matchesLoading && matches.length === 0
+    ? "..."
+    : `${activeSeniorCount}명`;
+
+  const upcomingSchedules = useMemo(() => {
+    const now = new Date();
+    return schedules
+      .filter((s) => s.status === "PENDING" || s.status === "CONFIRMED")
+      .filter((s) => {
+        const { date, time } = splitLocalDateTime(s.scheduledStartAt);
+        const [y, m, d] = date.split("-").map((n) => Number(n));
+        const [hh, mm] = time.split(":").map((n) => Number(n));
+        if (!y || !m || !d) return true;
+        return new Date(y, m - 1, d, hh || 0, mm || 0).getTime() >= now.getTime();
+      })
+      .slice()
+      .sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt))
+      .slice(0, 3);
+  }, [schedules]);
 
   return (
     <div className="min-h-screen" style={{ fontFamily: 'Pretendard, sans-serif', backgroundColor: '#FAF8F5' }}>
@@ -79,18 +246,18 @@ export default function YouthDashboard() {
                 </button>
               </Link>
             </div>
-            <div className="flex items-center gap-4 mt-4">
+            <div className="flex items-center gap-4 mt-4 flex-wrap">
               <div className="bg-white/20 rounded-2xl px-4 py-2">
                 <p className="text-white/80 text-xs">이번달 대화</p>
-                <p className="text-white font-bold text-lg">0회</p>
+                <p className="text-white font-bold text-lg">{thisMonthCountText}</p>
               </div>
               <div className="bg-white/20 rounded-2xl px-4 py-2">
                 <p className="text-white/80 text-xs">누적 대화 시간</p>
-                <p className="text-white font-bold text-lg">0분</p>
+                <p className="text-white font-bold text-lg">{totalMinutesText}</p>
               </div>
               <div className="bg-white/20 rounded-2xl px-4 py-2">
                 <p className="text-white/80 text-xs">담당 어르신</p>
-                <p className="text-white font-bold text-lg">1명</p>
+                <p className="text-white font-bold text-lg">{activeSeniorCountText}</p>
               </div>
             </div>
           </div>
@@ -108,7 +275,9 @@ export default function YouthDashboard() {
             </div>
             <div className="flex-1">
               <p className="font-semibold text-gray-900" style={{ fontSize: '0.95rem' }}>사회참여 활동 증명서</p>
-              <p className="text-gray-500" style={{ fontSize: '0.8rem' }}>누적 10시간 달성 시 발급 가능해요</p>
+              <p className="text-gray-500" style={{ fontSize: '0.8rem' }}>
+                발급 완료 {totalCertifiedHoursText} · 발급 가능 {availableCertificateHoursText}
+              </p>
             </div>
             <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
           </div>
@@ -185,21 +354,29 @@ export default function YouthDashboard() {
 
         {/* Upcoming Schedule */}
         <h2 className="text-gray-700 mb-4" style={{ fontSize: '1rem', fontWeight: 600 }}>다가오는 일정</h2>
-        {upcomingSchedules.length > 0 ? (
+        {schedulesLoading && upcomingSchedules.length === 0 ? (
+          <div className="bg-white rounded-2xl px-5 py-6 text-center shadow-sm text-gray-400" style={{ fontSize: '0.88rem' }}>
+            일정 정보를 불러오는 중...
+          </div>
+        ) : upcomingSchedules.length > 0 ? (
           <div className="space-y-3">
-            {upcomingSchedules.map((schedule, i) => (
-              <div key={i} className="bg-white rounded-2xl px-5 py-4 flex items-center justify-between shadow-sm">
+            {upcomingSchedules.map((schedule) => (
+              <div key={schedule.scheduleId} className="bg-white rounded-2xl px-5 py-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ backgroundColor: '#FFE8D6' }}>
                     <Clock className="w-5 h-5" style={{ color: '#FF8A3D' }} />
                   </div>
                   <div>
-                    <p className="text-gray-900" style={{ fontWeight: 600, fontSize: '0.9rem' }}>{schedule.name}</p>
-                    <p className="text-gray-500" style={{ fontSize: '0.78rem' }}>{schedule.time} · {schedule.type}</p>
+                    <p className="text-gray-900" style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                      {schedule.elderName} 어르신
+                    </p>
+                    <p className="text-gray-500" style={{ fontSize: '0.78rem' }}>
+                      {formatScheduleTime(schedule)}
+                    </p>
                   </div>
                 </div>
                 <span className="text-xs px-3 py-1 rounded-full" style={{ backgroundColor: '#FFF4E6', color: '#FF8A3D', fontWeight: 600 }}>
-                  예정
+                  {schedule.status === "CONFIRMED" ? "확정" : "대기"}
                 </span>
               </div>
             ))}
