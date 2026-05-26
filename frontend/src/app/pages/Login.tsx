@@ -5,51 +5,30 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Heart, Clock, Ban, XCircle, User, Shield, UserCog } from "lucide-react";
+import { Heart, Clock, Ban, XCircle, User, Shield, UserCog, Tv } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth/AuthContext";
 import { routeForRole } from "../../lib/auth/routes";
+import {
+  DEMO_ACCOUNTS,
+  DEMO_LOGIN_ENABLED,
+  findDemoAccount,
+  type DemoAccountDefinition,
+} from "../../lib/auth/demo";
 import { ApiError } from "../../lib/api/client";
 import { ErrorCode } from "../../types/api";
 
-type DemoAccount = {
-  key: "youth" | "guardian" | "admin";
-  roleLabel: string;
-  description: string;
-  id: string;
-  password: string;
-  Icon: typeof User;
-};
-
 const SHOW_DEMO_ACCOUNTS =
-  import.meta.env.VITE_SHOW_DEMO_ACCOUNTS === "true";
+  import.meta.env.VITE_SHOW_DEMO_ACCOUNTS === "true" || DEMO_LOGIN_ENABLED;
 
-const DEMO_ACCOUNT_LIST: DemoAccount[] = [
-  {
-    key: "youth",
-    roleLabel: "청년",
-    description: "승인 완료된 청년 계정. 매칭/일정/통화 데모용.",
-    id: import.meta.env.VITE_DEMO_YOUTH_ID || "youth_approved",
-    password: import.meta.env.VITE_DEMO_YOUTH_PASSWORD || "",
-    Icon: User,
-  },
-  {
-    key: "guardian",
-    roleLabel: "보호자",
-    description: "보호자 대시보드 / 어르신 관리 데모용.",
-    id: import.meta.env.VITE_DEMO_GUARDIAN_ID || "guardian",
-    password: import.meta.env.VITE_DEMO_GUARDIAN_PASSWORD || "",
-    Icon: Shield,
-  },
-  {
-    key: "admin",
-    roleLabel: "관리자",
-    description: "관리자 운영 큐 / 승인·제재 데모용.",
-    id: import.meta.env.VITE_DEMO_ADMIN_ID || "admin",
-    password: import.meta.env.VITE_DEMO_ADMIN_PASSWORD || "",
-    Icon: UserCog,
-  },
-];
+const DEMO_FILL_PASSWORD = "demo";
+
+function iconForAccount(account: DemoAccountDefinition): typeof User {
+  if (account.redirectTo === "/senior") return Tv;
+  if (account.user?.role === "ADMIN") return UserCog;
+  if (account.user?.role === "GUARDIAN") return Shield;
+  return User;
+}
 
 function getSafeRedirectPath(from: unknown): string | null {
   if (
@@ -69,7 +48,7 @@ function getSafeRedirectPath(from: unknown): string | null {
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, status, user } = useAuth();
+  const { login, loginAsDemoUser, status, user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -86,9 +65,42 @@ export default function Login() {
     return <Navigate to={redirectPath ?? routeForRole(user.role, user)} replace />;
   }
 
+  const handleDemoSubmit = (account: DemoAccountDefinition): boolean => {
+    if (account.loginDialog === "pending") {
+      setPendingDialog(true);
+      return true;
+    }
+    if (account.loginDialog === "rejected") {
+      setRejectionReason(account.rejectionReason ?? null);
+      setRejectedDialog(true);
+      return true;
+    }
+    if (account.loginDialog === "suspended") {
+      setSuspendedDialog(true);
+      return true;
+    }
+    if (!account.user && account.redirectTo) {
+      navigate(account.redirectTo, { replace: true });
+      return true;
+    }
+    if (account.user) {
+      const me = loginAsDemoUser(account.user);
+      navigate(redirectPath ?? routeForRole(me.role, me), { replace: true });
+      return true;
+    }
+    return false;
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
+
+    if (DEMO_LOGIN_ENABLED) {
+      const demoAccount = findDemoAccount(email);
+      if (demoAccount) {
+        if (handleDemoSubmit(demoAccount)) return;
+      }
+    }
 
     setSubmitting(true);
     try {
@@ -122,17 +134,10 @@ export default function Login() {
     toast.info("소셜 로그인은 아직 준비 중입니다.");
   };
 
-  const handleFillDemoAccount = (account: DemoAccount) => {
-    setEmail(account.id);
-    if (account.password) {
-      setPassword(account.password);
-      toast.success(`${account.roleLabel} 시연 계정을 입력했습니다.`);
-    } else {
-      setPassword("");
-      toast.info(
-        `${account.roleLabel} ID만 채웠습니다. 비밀번호는 직접 입력해주세요. (환경변수 미설정)`,
-      );
-    }
+  const handleFillDemoAccount = (account: DemoAccountDefinition) => {
+    setEmail(account.email);
+    setPassword(DEMO_FILL_PASSWORD);
+    toast.success(`${account.label} 시연 계정을 입력했습니다.`);
   };
 
   return (
@@ -230,19 +235,24 @@ export default function Login() {
         {SHOW_DEMO_ACCOUNTS && (
           <Card className="mt-4 rounded-3xl border-0 shadow-md">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">시연용 계정</CardTitle>
+              <CardTitle className="text-base">프론트 단독 데모 모드</CardTitle>
               <CardDescription className="text-xs">
-                아래 카드의 “입력하기”를 누르면 로그인 폼에 값이 채워집니다.
-                실제 로그인은 위 로그인 버튼을 눌러 진행하세요.
+                백엔드 없이 화면 흐름을 확인하기 위한 계정입니다.
+                {" "}
+                <code>VITE_ENABLE_DEMO_LOGIN=true</code>일 때만 동작합니다.
+                {!DEMO_LOGIN_ENABLED && (
+                  <span className="block mt-1 text-amber-600">
+                    현재 데모 로그인은 꺼져 있습니다. 입력하기를 눌러도 백엔드 로그인이 실행됩니다.
+                  </span>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {DEMO_ACCOUNT_LIST.map((account) => {
-                const { Icon } = account;
-                const hasPassword = Boolean(account.password);
+              {DEMO_ACCOUNTS.map((account) => {
+                const Icon = iconForAccount(account);
                 return (
                   <div
-                    key={account.key}
+                    key={account.email}
                     className="flex items-start gap-3 rounded-2xl p-3"
                     style={{ backgroundColor: "#FFF8F0", border: "1px solid #FFE8D6" }}
                   >
@@ -255,20 +265,15 @@ export default function Login() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold text-gray-900">
-                          {account.roleLabel}
+                          {account.label}
                         </span>
                         <span className="text-xs text-gray-500 truncate">
-                          {account.id}
+                          {account.email}
                         </span>
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">
                         {account.description}
                       </p>
-                      {!hasPassword && (
-                        <p className="text-[11px] text-gray-400 mt-0.5">
-                          비밀번호 환경변수 미설정 — 수동 입력 필요
-                        </p>
-                      )}
                     </div>
                     <Button
                       type="button"
@@ -283,8 +288,8 @@ export default function Login() {
                 );
               })}
               <p className="text-[11px] text-gray-400 pt-1">
-                실제 비밀번호는 <code>.env.development.local</code> 에만 보관하세요.
-                코드/저장소에는 커밋하지 않습니다.
+                실제 비밀번호는 코드/저장소에 두지 않습니다. 로컬에서는 <code>.env.development.local</code> 에
+                {" "}<code>VITE_ENABLE_DEMO_LOGIN=true</code> 를 추가해 사용하세요.
               </p>
             </CardContent>
           </Card>

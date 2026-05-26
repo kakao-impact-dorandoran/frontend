@@ -11,12 +11,25 @@ import {
 import type { AuthUserResponse } from "../../types/api";
 import { getMe, login as loginApi } from "../api/auth";
 import { ApiError } from "../api/client";
-import { clearTokens, getAccessToken, setTokens } from "./storage";
+import {
+  buildDemoToken,
+  DEMO_LOGIN_ENABLED,
+  isDemoToken,
+} from "./demo";
+import {
+  clearDemoUser,
+  clearTokens,
+  getAccessToken,
+  getDemoUser,
+  setDemoUser,
+  setTokens,
+} from "./storage";
 
 interface AuthContextValue {
   user: AuthUserResponse | null;
   status: "idle" | "loading" | "authenticated" | "unauthenticated";
   login: (email: string, password: string) => Promise<AuthUserResponse>;
+  loginAsDemoUser: (user: AuthUserResponse) => AuthUserResponse;
   logout: () => void;
   refreshMe: () => Promise<AuthUserResponse | null>;
 }
@@ -31,6 +44,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshMe = useCallback(async (): Promise<AuthUserResponse | null> => {
     const token = getAccessToken();
     if (!token) {
+      setUser(null);
+      setStatus("unauthenticated");
+      return null;
+    }
+    if (isDemoToken(token)) {
+      const demo = getDemoUser();
+      if (DEMO_LOGIN_ENABLED && demo) {
+        setUser(demo);
+        setStatus("authenticated");
+        return demo;
+      }
+      clearTokens();
       setUser(null);
       setStatus("unauthenticated");
       return null;
@@ -71,15 +96,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const loginAsDemoUser = useCallback((demo: AuthUserResponse) => {
+    if (!DEMO_LOGIN_ENABLED) {
+      throw new Error("Demo login is disabled. Set VITE_ENABLE_DEMO_LOGIN=true to use this feature.");
+    }
+    const token = buildDemoToken(demo.email);
+    setTokens(token, null);
+    setDemoUser(demo);
+    setUser(demo);
+    setStatus("authenticated");
+    return demo;
+  }, []);
+
   const logout = useCallback(() => {
     clearTokens();
+    clearDemoUser();
     setUser(null);
     setStatus("unauthenticated");
   }, []);
 
   const value = useMemo<AuthContextValue>(
-    () => ({ user, status, login, logout, refreshMe }),
-    [user, status, login, logout, refreshMe],
+    () => ({ user, status, login, loginAsDemoUser, logout, refreshMe }),
+    [user, status, login, loginAsDemoUser, logout, refreshMe],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
