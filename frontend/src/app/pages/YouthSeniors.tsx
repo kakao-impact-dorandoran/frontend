@@ -24,7 +24,11 @@ import {
 } from "../components/ui/dialog";
 import { toast } from "sonner";
 import { ApiError } from "../../lib/api/client";
-import { getMatchDetail, getMyMatches } from "../../lib/api/matching";
+import {
+  createMatchTerminationRequest,
+  getMatchDetail,
+  getMyMatches,
+} from "../../lib/api/matching";
 import type {
   CallType,
   DifficultyLevel,
@@ -32,6 +36,8 @@ import type {
   MatchStatus,
   MatchSummaryResponse,
 } from "../../types/api";
+import { ErrorCode } from "../../types/api";
+import { Button } from "../components/ui/button";
 
 const STATUS_LABEL: Record<MatchStatus, string> = {
   MATCHED: "매칭 중",
@@ -93,6 +99,30 @@ function resolveListErrorMessage(err: unknown): string {
   return "매칭 목록을 불러오지 못했습니다. 네트워크 상태를 확인해주세요.";
 }
 
+function resolveTerminationRequestError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.MATCH_TERMINATION_ALREADY_REQUESTED:
+        return "이미 중단 요청이 접수된 매칭입니다.";
+      case ErrorCode.MATCH_TERMINATION_ACCESS_DENIED:
+        return "이 매칭에 대한 중단 요청 권한이 없습니다.";
+      case ErrorCode.MATCH_ALREADY_ENDED:
+        return "이미 종료된 매칭입니다.";
+      case ErrorCode.INVALID_INPUT:
+        return "중단 요청 사유를 입력해 주세요.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return err.message || "이 매칭에 대한 중단 요청 권한이 없습니다.";
+    if (err.status === 404) return "매칭 정보를 찾을 수 없습니다.";
+    return err.message || "매칭 중단 요청을 접수하지 못했습니다.";
+  }
+  return "매칭 중단 요청을 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+const TERMINATION_REASON_MAX = 500;
+
 function resolveDetailErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "로그인이 필요합니다. 다시 로그인해주세요.";
@@ -126,6 +156,11 @@ export default function YouthSeniors() {
   const [activeDetail, setActiveDetail] = useState<MatchDetailResponse | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  const [terminationTarget, setTerminationTarget] = useState<MatchSummaryResponse | null>(null);
+  const [terminationReason, setTerminationReason] = useState("");
+  const [terminationSubmitting, setTerminationSubmitting] = useState(false);
+  const [terminationError, setTerminationError] = useState<string | null>(null);
 
   const fetchMatches = useCallback(async (mode: "initial" | "refresh") => {
     if (mode === "initial") {
@@ -184,6 +219,66 @@ export default function YouthSeniors() {
   const showPlaceholderToast = () => {
     toast.info("다음 단계에서 연결 예정입니다.");
   };
+
+  const refetchActiveDetail = useCallback(async (matchId: string) => {
+    setIsDetailLoading(true);
+    setDetailError(null);
+    try {
+      const detail = await getMatchDetail(matchId);
+      setActiveDetail(detail);
+    } catch (err) {
+      setDetailError(resolveDetailErrorMessage(err));
+    } finally {
+      setIsDetailLoading(false);
+    }
+  }, []);
+
+  const openTerminationDialog = useCallback((match: MatchSummaryResponse) => {
+    setTerminationTarget(match);
+    setTerminationReason("");
+    setTerminationError(null);
+    setTerminationSubmitting(false);
+  }, []);
+
+  const closeTerminationDialog = useCallback(() => {
+    setTerminationTarget(null);
+    setTerminationReason("");
+    setTerminationError(null);
+    setTerminationSubmitting(false);
+  }, []);
+
+  const handleSubmitTermination = useCallback(async () => {
+    if (!terminationTarget) return;
+    const reason = terminationReason.trim();
+    if (!reason) {
+      setTerminationError("중단 요청 사유를 입력해 주세요.");
+      return;
+    }
+    setTerminationSubmitting(true);
+    setTerminationError(null);
+    try {
+      await createMatchTerminationRequest(terminationTarget.matchId, { reason });
+      toast.success("매칭 중단 요청이 접수되었습니다.");
+      const targetMatchId = terminationTarget.matchId;
+      closeTerminationDialog();
+      await fetchMatches("refresh");
+      if (activeMatch && activeMatch.matchId === targetMatchId) {
+        await refetchActiveDetail(targetMatchId);
+      }
+    } catch (err) {
+      const message = resolveTerminationRequestError(err);
+      setTerminationError(message);
+      toast.error(message);
+      setTerminationSubmitting(false);
+    }
+  }, [
+    terminationTarget,
+    terminationReason,
+    closeTerminationDialog,
+    fetchMatches,
+    activeMatch,
+    refetchActiveDetail,
+  ]);
 
   return (
     <div className="min-h-screen" style={{ fontFamily: 'Pretendard, sans-serif', backgroundColor: '#FAF8F5' }}>
@@ -343,14 +438,24 @@ export default function YouthSeniors() {
                     >
                       <Flag className="w-3.5 h-3.5" /> 신고하기
                     </button>
-                    <button
-                      onClick={showPlaceholderToast}
-                      disabled={isEnded || m.status === "TERMINATION_REQUESTED"}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-2xl border text-xs disabled:opacity-50"
-                      style={{ borderColor: '#E5E7EB', color: '#6B7280', fontWeight: 600 }}
-                    >
-                      <OctagonX className="w-3.5 h-3.5" /> 매칭 중단 요청
-                    </button>
+                    {m.status === "TERMINATION_REQUESTED" ? (
+                      <button
+                        disabled
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-2xl border text-xs opacity-70 cursor-not-allowed"
+                        style={{ borderColor: '#FDE68A', color: '#92400E', backgroundColor: '#FFF9E6', fontWeight: 600 }}
+                      >
+                        <OctagonX className="w-3.5 h-3.5" /> 중단 요청 접수됨
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => openTerminationDialog(m)}
+                        disabled={!ACTIVE_STATUSES.has(m.status)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-2xl border text-xs disabled:opacity-50"
+                        style={{ borderColor: '#E5E7EB', color: '#6B7280', fontWeight: 600 }}
+                      >
+                        <OctagonX className="w-3.5 h-3.5" /> 매칭 중단 요청
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -471,6 +576,88 @@ export default function YouthSeniors() {
               </div>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={terminationTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !terminationSubmitting) closeTerminationDialog();
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-3xl border-0 shadow-2xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <OctagonX className="w-5 h-5" style={{ color: '#E6A817' }} />
+              매칭 중단 요청
+            </DialogTitle>
+            <DialogDescription>
+              관리자 검토 후 매칭이 종료됩니다. 신중하게 작성해 주세요.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {terminationTarget && (
+              <div className="rounded-2xl p-3" style={{ backgroundColor: '#FAF8F5' }}>
+                <p className="text-gray-700" style={{ fontSize: '0.88rem', fontWeight: 600 }}>
+                  {terminationTarget.elderName} 어르신
+                </p>
+                <p className="text-gray-400 mt-1" style={{ fontSize: '0.75rem' }}>
+                  매칭번호 <span className="font-mono">{terminationTarget.matchId.slice(0, 8)}</span>
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-gray-700">중단 요청 사유</p>
+              <textarea
+                value={terminationReason}
+                onChange={(e) => {
+                  setTerminationReason(e.target.value.slice(0, TERMINATION_REASON_MAX));
+                  if (terminationError) setTerminationError(null);
+                }}
+                disabled={terminationSubmitting}
+                rows={4}
+                placeholder="중단을 요청하는 사유를 구체적으로 적어주세요."
+                className="w-full px-3 py-2 border border-gray-200 rounded-2xl text-sm resize-none focus:outline-none focus:border-amber-300 disabled:bg-gray-50"
+              />
+              <p className="text-right text-xs text-gray-400">
+                {terminationReason.length} / {TERMINATION_REASON_MAX}자
+              </p>
+            </div>
+
+            {terminationError && (
+              <div className="rounded-2xl p-3" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{terminationError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 rounded-2xl"
+                onClick={closeTerminationDialog}
+                disabled={terminationSubmitting}
+              >
+                취소
+              </Button>
+              <Button
+                className="flex-1 rounded-2xl text-white"
+                style={{ backgroundColor: '#E6A817' }}
+                onClick={() => void handleSubmitTermination()}
+                disabled={terminationSubmitting || !terminationReason.trim()}
+              >
+                {terminationSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                    요청 중...
+                  </>
+                ) : (
+                  "중단 요청"
+                )}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

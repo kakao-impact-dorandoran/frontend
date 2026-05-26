@@ -88,6 +88,12 @@ export const ErrorCode = {
   // 매칭 조회/접근
   MATCH_NOT_FOUND: "M002",
   MATCH_ACCESS_DENIED: "M003",
+  // 매칭 중단 요청
+  MATCH_TERMINATION_REQUEST_NOT_FOUND: "MT001",
+  MATCH_TERMINATION_ALREADY_REQUESTED: "MT002",
+  INVALID_MATCH_TERMINATION_STATUS: "MT003",
+  MATCH_TERMINATION_ACCESS_DENIED: "MT004",
+  MATCH_ALREADY_ENDED: "MT005",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -419,4 +425,36 @@ export interface ScheduleCreateRequest {
  */
 export interface ScheduleCancelRequest {
   cancelReason?: string | null;
+}
+
+// ---------- MatchTerminationRequest ----------
+/**
+ * 백엔드 enum: MatchTerminationRequestStatus
+ */
+export type MatchTerminationRequestStatus = "REQUESTED" | "APPROVED" | "REJECTED";
+
+/**
+ * 매칭 중단 요청 생성 request body.
+ * 백엔드 DTO: MatchTerminationCreateRequest
+ * - reason: 필수 (@NotBlank). 공백만 입력하면 백엔드에서 400 C001.
+ */
+export interface MatchTerminationCreateRequest {
+  reason: string;
+}
+
+/**
+ * 매칭 중단 요청 응답.
+ * 백엔드 DTO: MatchTerminationResponse
+ * 엔드포인트: POST /api/v1/matches/{matchId}/termination-requests (YOUTH/GUARDIAN)
+ *
+ * 주의: 응답에는 매칭 자체의 status 변화가 없음. 매칭 상태는 별도 조회 필요.
+ * 동일 매칭에 REQUESTED 가 이미 있으면 MT002 (409).
+ */
+export interface MatchTerminationResponse {
+  requestId: string;
+  matchId: string;
+  requesterUserId: string | null;
+  reason: string;
+  status: MatchTerminationRequestStatus;
+  createdAt: string;
 }
