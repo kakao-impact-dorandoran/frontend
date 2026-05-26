@@ -105,6 +105,19 @@ export const ErrorCode = {
   ACTIVITY_SCHEDULE_MISMATCH: "AR008",
   ACTIVITY_CALL_LOG_MISMATCH: "AR009",
   ACTIVITY_MATCH_NOT_RECORDABLE: "AR010",
+  // 통화 (Call / CallLog)
+  CALL_LOG_NOT_FOUND: "CL001",
+  CALL_ACCESS_DENIED: "CL002",
+  CALL_ALREADY_ENDED: "CL003",
+  CALL_MATCH_MISMATCH: "CL004",
+  CALL_SCHEDULE_MISMATCH: "CL005",
+  CALL_SCHEDULE_NOT_CONFIRMED: "CL006",
+  INVALID_CALL_TYPE: "CL007",
+  // 전용 기기 (Device)
+  DEVICE_NOT_FOUND: "D002",
+  DEVICE_AUTH_REQUIRED: "D005",
+  INVALID_DEVICE_AUTHORIZATION: "D006",
+  DEVICE_NOT_REGISTERED: "D007",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -525,6 +538,60 @@ export interface ActivityRecordSummaryResponse {
   actualEndAt: string | null;
   durationMinutes: number | null;
   notes: string | null;
+  createdAt: string;
+}
+
+// ---------- Call / CallLog ----------
+/**
+ * 백엔드 enum: CallLogStatus
+ * (PENDING = 통화 시작 직후, COMPLETED = 정상 종료, MISSED = 미응답, FAILED = 실패)
+ */
+export type CallLogStatus = "PENDING" | "COMPLETED" | "MISSED" | "FAILED";
+
+/**
+ * 통화 시작 요청.
+ * 백엔드 DTO: CallStartRequest
+ * 엔드포인트:
+ *  - POST /api/v1/calls/video  (Device token 필요)
+ *  - POST /api/v1/calls/audio  (Device token 필요)
+ *
+ * - matchId 필수 (@NotNull).
+ * - scheduleId optional — 즉시 통화일 경우 null.
+ */
+export interface CallStartRequest {
+  matchId: string;
+  scheduleId?: string | null;
+}
+
+/**
+ * 통화 종료 요청.
+ * 백엔드 DTO: CallEndRequest
+ * 엔드포인트: PATCH /api/v1/calls/{callLogId}/end (Device 또는 YOUTH JWT)
+ *
+ * - 모든 필드 optional. body 자체 생략 가능.
+ * - failureReason: 비정상 종료 시 사유 메모 (백엔드 현 구현에서는 단순 저장만).
+ */
+export interface CallEndRequest {
+  failureReason?: string | null;
+}
+
+/**
+ * 통화 기록 응답.
+ * 백엔드 DTO: CallLogResponse
+ * 엔드포인트:
+ *  - POST  /api/v1/calls/video, /audio  → status=PENDING, startAt 채워짐, endAt null
+ *  - PATCH /api/v1/calls/{callLogId}/end → status=COMPLETED, endAt 채워짐
+ *
+ * - 시간은 Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface CallLogResponse {
+  callLogId: string;
+  matchId: string;
+  scheduleId: string | null;
+  callType: CallType;
+  status: CallLogStatus;
+  startAt: string | null;
+  endAt: string | null;
   createdAt: string;
 }
 

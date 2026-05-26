@@ -785,11 +785,15 @@ export default function YouthSchedule() {
                               <button
                                 className="flex-1 py-2.5 rounded-xl text-white flex items-center justify-center gap-1.5"
                                 style={{ backgroundColor: "#FF8A3D", fontWeight: 600, fontSize: "0.85rem" }}
-                                onClick={() =>
-                                  navigate(
-                                    `/youth/call?senior=${encodeURIComponent(s.elderName)}&type=video`,
-                                  )
-                                }
+                                onClick={() => {
+                                  const params = new URLSearchParams({
+                                    senior: s.elderName,
+                                    type: "video",
+                                    matchId: s.matchId,
+                                    scheduleId: s.scheduleId,
+                                  });
+                                  navigate(`/youth/call?${params.toString()}`);
+                                }}
                               >
                                 <Video className="w-4 h-4" />
                                 화상 통화 시작
