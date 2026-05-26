@@ -682,6 +682,75 @@ export interface HelpRequestResponse {
   createdAt: string;
 }
 
+// ---------- Admin: HelpRequest ----------
+/**
+ * 관리자 도움 요청 응답.
+ * 백엔드 DTO: AdminHelpRequestResponse
+ * 엔드포인트: GET /api/v1/admin/help-requests?status=PENDING
+ *            PATCH /api/v1/admin/help-requests/{helpRequestId}
+ */
+export interface AdminHelpRequestResponse {
+  helpRequestId: string;
+  elderId: string;
+  elderName: string;
+  deviceId: string | null;
+  requestType: HelpRequestType | null;
+  deviceStatus: Record<string, unknown> | null;
+  handledStatus: HelpRequestStatus;
+  handlerId: string | null;
+  handlerName: string | null;
+  handledAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * 관리자 도움 요청 처리 요청.
+ * 백엔드 DTO: AdminHelpRequestProcessRequest
+ * - status: HANDLED 만 허용 (그 외는 400 H003).
+ * - 이미 HANDLED 인 요청 재처리 시 409 H002.
+ */
+export interface AdminHelpRequestProcessRequest {
+  status: HelpRequestStatus;
+}
+
+// ---------- Admin: MatchTerminationRequest ----------
+/**
+ * 관리자 매칭 중단 요청 응답.
+ * 백엔드 DTO: AdminMatchTerminationResponse
+ * 엔드포인트: GET /api/v1/admin/match-termination-requests?status=REQUESTED
+ *            PATCH /api/v1/admin/match-termination-requests/{requestId}
+ *
+ * - status=APPROVED 처리 시 백엔드가 매칭 상태를 ENDED 로 변경한다.
+ * - 이미 처리된 요청은 400 MT003.
+ */
+export interface AdminMatchTerminationResponse {
+  requestId: string;
+  matchId: string;
+  youthId: string;
+  youthName: string;
+  elderId: string;
+  elderName: string;
+  requesterUserId: string | null;
+  requesterUserName: string | null;
+  reason: string;
+  status: MatchTerminationRequestStatus;
+  adminId: string | null;
+  adminMemo: string | null;
+  createdAt: string;
+  processedAt: string | null;
+}
+
+/**
+ * 관리자 매칭 중단 요청 처리 요청.
+ * 백엔드 DTO: AdminMatchTerminationProcessRequest
+ * - status: APPROVED | REJECTED 만 허용 (REQUESTED 는 400 MT003).
+ * - adminMemo: optional.
+ */
+export interface AdminMatchTerminationProcessRequest {
+  status: MatchTerminationRequestStatus;
+  adminMemo?: string | null;
+}
+
 // ---------- VolunteerStats ----------
 /**
  * 청년 누적 활동 통계 응답.

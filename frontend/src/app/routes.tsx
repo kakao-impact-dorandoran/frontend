@@ -47,7 +47,12 @@ export const router = createBrowserRouter([
       { path: "/senior",                    Component: SeniorTablet      },
       { path: "/guardian/dashboard",         Component: GuardianDashboard  },
       { path: "/guardian/senior-profile",   Component: SeniorProfileSetup },
-      { path: "/admin",                     Component: AdminDashboard    },
+      {
+        element: <RequireAuth allowedRoles={["ADMIN"]} />,
+        children: [
+          { path: "/admin",                   Component: AdminDashboard    },
+        ],
+      },
       { path: "/about",                     Component: About             },
       { path: "/pricing",                   Component: Pricing           },
       { path: "/faq",                       Component: FAQ               },
