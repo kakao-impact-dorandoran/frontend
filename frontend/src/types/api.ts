@@ -130,6 +130,12 @@ export const ErrorCode = {
   REPORT_NOT_FOUND: "R001",
   INVALID_REPORT_STATUS: "R002",
   REPORT_ACCESS_DENIED: "R003",
+  // 증명서 (Certificate)
+  CERTIFICATE_NOT_FOUND: "CT001",
+  CERTIFICATE_ACCESS_DENIED: "CT002",
+  CERTIFICATE_NOT_ENOUGH_ACTIVITY_TIME: "CT003",
+  CERTIFICATE_SERIAL_DUPLICATED: "CT004",
+  CERTIFICATE_REQUESTED_HOURS_INVALID: "CT005",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -923,6 +929,42 @@ export interface AdminReportResponse {
 export interface AdminReportProcessRequest {
   status: ReportStatus;
   adminMemo?: string | null;
+}
+
+// ---------- Certificate ----------
+/**
+ * 증명서 발급 요청.
+ * 백엔드 DTO: CertificateIssueRequest
+ * 엔드포인트: POST /api/v1/youth/certificates (YOUTH)
+ *
+ * - requestedHours: @NotNull, @Min(1) — 발급 신청 시간(시간 단위, 정수).
+ *   백엔드 정책상 10시간 미만은 409 CT003.
+ *   availableCertificateHours 보다 크면 409 CT003.
+ */
+export interface CertificateIssueRequest {
+  requestedHours: number;
+}
+
+/**
+ * 증명서 응답.
+ * 백엔드 DTO: CertificateResponse
+ * 엔드포인트:
+ *  - POST /api/v1/youth/certificates       → 201 Created, 단건
+ *  - GET  /api/v1/youth/certificates/me    → 200 OK, 배열 (issuedAt desc)
+ *
+ * - title: 고정 문자열 ("도란도란 사회참여 증명서").
+ * - certificateSerial: "DRDR-{YYYY}-{0001}" 형식.
+ * - pdfUrl: 현재 항상 null (PDF 실제 생성은 후순위).
+ * - issuedAt: Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface CertificateResponse {
+  certificateId: string;
+  certificateSerial: string;
+  title: string;
+  youthId: string;
+  certifiedHours: number;
+  pdfUrl: string | null;
+  issuedAt: string;
 }
 
 // ---------- VolunteerStats ----------
