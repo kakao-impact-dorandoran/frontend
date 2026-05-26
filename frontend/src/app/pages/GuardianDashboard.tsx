@@ -2,15 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import {
-  Heart, LogOut, User, Plus, Tablet, ChevronRight, CheckCircle, XCircle,
-  AlertCircle, Clock, FileText, Flag, BookOpen, Loader2, RefreshCw,
-  Calendar as CalendarIcon,
+  Heart, LogOut, User, Plus, Tablet, ChevronRight,
+  Clock, Flag, BookOpen, Loader2, RefreshCw,
+  Calendar as CalendarIcon, MessageCircle, UserCheck,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ApiError } from "../../lib/api/client";
 import { getMyElders } from "../../lib/api/elder";
+import { getMyMatches } from "../../lib/api/matching";
 import {
   createElderAvailableTime,
   getElderAvailableTimes,
@@ -18,37 +19,33 @@ import {
 import { getMySchedules } from "../../lib/api/schedule";
 import type {
   AvailableTimeResponse,
+  CallType,
+  DifficultyLevel,
   ElderResponse,
+  MatchStatus,
+  MatchSummaryResponse,
   ScheduleResponse,
   ScheduleStatus,
 } from "../../types/api";
 import { ErrorCode } from "../../types/api";
 import { useAuth } from "../../lib/auth/AuthContext";
 
-type DeviceStatus = "READY" | "SHIPPING" | "DELIVERED";
-
-type ActivityRecord = {
-  id: number;
-  date: string;
-  youthName: string;
-  done: boolean;
-  duration: number | null;
-  note: string;
+const MATCH_STATUS_LABEL: Record<MatchStatus, { label: string; color: string; bg: string }> = {
+  MATCHED:                { label: "매칭됨",      color: "#3DAF8A", bg: "#E8F8F5" },
+  IN_PROGRESS:            { label: "진행 중",     color: "#3D7AFF", bg: "#EBF4FF" },
+  TERMINATION_REQUESTED:  { label: "중단 요청됨", color: "#E6A817", bg: "#FFF9E6" },
+  ENDED:                  { label: "종료됨",      color: "#9CA3AF", bg: "#F3F4F6" },
 };
 
-type Senior = {
-  id: number;
-  name: string;
-  age: number;
-  region: string;
-  deviceStatus: DeviceStatus;
-  activities: ActivityRecord[];
+const CALL_TYPE_LABEL: Record<CallType, string> = {
+  VIDEO: "화상 통화",
+  AUDIO: "음성 통화",
 };
 
-const DEVICE_LABEL: Record<DeviceStatus, { label: string; color: string; bg: string }> = {
-  READY:     { label: "배송 준비 중", color: "#E6A817", bg: "#FFF9E6" },
-  SHIPPING:  { label: "배송 중",      color: "#3D7AFF", bg: "#EBF4FF" },
-  DELIVERED: { label: "배송 완료",    color: "#3DAF8A", bg: "#E8F8F5" },
+const DIFFICULTY_LABEL: Record<DifficultyLevel, string> = {
+  LOW:    "쉬움",
+  MEDIUM: "보통",
+  HIGH:   "어려움",
 };
 
 function pad2(n: number): string {
@@ -75,6 +72,36 @@ function resolveElderListError(err: unknown): string {
     return err.message || "어르신 목록을 불러오지 못했습니다.";
   }
   return "어르신 목록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+function resolveMatchListError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "보호자 권한이 필요합니다.";
+    }
+    return err.message || "매칭 정보를 불러오지 못했습니다.";
+  }
+  return "매칭 정보를 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+const MATCHED_AT_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function formatMatchedAt(value: string | null): string {
+  if (!value) return "";
+  const { date, time } = splitLocalDateTime(value);
+  const [y, m, d] = date.split("-").map((n) => Number(n));
+  const [hh, mm] = time.split(":").map((n) => Number(n));
+  if (!y || !m || !d) return value;
+  const dt = new Date(y, m - 1, d, hh || 0, mm || 0);
+  return MATCHED_AT_FORMATTER.format(dt);
 }
 
 function resolveAvailLoadError(err: unknown): string {
@@ -149,15 +176,16 @@ function resolveAvailCreateError(err: unknown): string {
 export default function GuardianDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [seniors] = useState<Senior[]>([]);
   const [logoutConfirm, setLogoutConfirm] = useState(false);
-  const [selectedSenior, setSelectedSenior] = useState<Senior | null>(null);
-  const [recordDialogOpen, setRecordDialogOpen] = useState(false);
 
   const [elders, setElders] = useState<ElderResponse[]>([]);
   const [eldersLoading, setEldersLoading] = useState(false);
   const [eldersError, setEldersError] = useState<string | null>(null);
   const [selectedElderId, setSelectedElderId] = useState<string | null>(null);
+
+  const [matches, setMatches] = useState<MatchSummaryResponse[]>([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState<string | null>(null);
 
   const [elderAvailTimes, setElderAvailTimes] = useState<AvailableTimeResponse[]>([]);
   const [availLoading, setAvailLoading] = useState(false);
@@ -172,9 +200,9 @@ export default function GuardianDashboard() {
   const [schedulesLoading, setSchedulesLoading] = useState(false);
   const [schedulesError, setSchedulesError] = useState<string | null>(null);
 
-  // F-31 신고하기
+  // F-31 신고하기 (후속 API 미연결 — placeholder)
   const [reportOpen, setReportOpen] = useState(false);
-  const [reportTarget, setReportTarget] = useState<Senior | null>(null);
+  const [reportTarget, setReportTarget] = useState<ElderResponse | null>(null);
   const [reportType, setReportType] = useState("부적절한 언행");
   const [reportContent, setReportContent] = useState("");
 
@@ -199,16 +227,16 @@ export default function GuardianDashboard() {
   const monthsInYear = [...new Set(JOURNALS.filter(j => j.year === journalYear).map(j => j.month))];
   const filteredJournals = JOURNALS.filter(j => j.year === journalYear && j.month === journalMonth);
 
-  const openReport = (senior: Senior) => { setReportTarget(senior); setReportType("부적절한 언행"); setReportContent(""); setReportOpen(true); };
+  const openReport = (elder: ElderResponse) => {
+    setReportTarget(elder);
+    setReportType("부적절한 언행");
+    setReportContent("");
+    setReportOpen(true);
+  };
   const handleSubmitReport = () => {
     if (!reportContent.trim()) { toast.error("신고 내용을 입력해주세요."); return; }
-    toast.success("신고가 접수되었습니다. 관리자가 검토 후 처리합니다.");
+    toast.message("신고 접수는 다음 단계에서 연결 예정입니다.");
     setReportOpen(false);
-  };
-
-  const openRecords = (senior: Senior) => {
-    setSelectedSenior(senior);
-    setRecordDialogOpen(true);
   };
 
   const loadElders = useCallback(async () => {
@@ -233,6 +261,26 @@ export default function GuardianDashboard() {
       setEldersError(resolveElderListError(err));
     } finally {
       setEldersLoading(false);
+    }
+  }, [user]);
+
+  const loadMatches = useCallback(async () => {
+    if (!user) {
+      setMatches([]);
+      setMatchesError(null);
+      setMatchesLoading(false);
+      return;
+    }
+    setMatchesLoading(true);
+    setMatchesError(null);
+    try {
+      const list = await getMyMatches();
+      setMatches(list ?? []);
+    } catch (err) {
+      setMatches([]);
+      setMatchesError(resolveMatchListError(err));
+    } finally {
+      setMatchesLoading(false);
     }
   }, [user]);
 
@@ -285,12 +333,33 @@ export default function GuardianDashboard() {
   }, [loadElders]);
 
   useEffect(() => {
+    void loadMatches();
+  }, [loadMatches]);
+
+  useEffect(() => {
     void loadElderAvailTimes(selectedElderId);
   }, [selectedElderId, loadElderAvailTimes]);
 
   useEffect(() => {
     void loadSchedules();
   }, [loadSchedules]);
+
+  const matchesByElder = useMemo(() => {
+    const map = new Map<string, MatchSummaryResponse[]>();
+    for (const m of matches) {
+      const arr = map.get(m.elderId);
+      if (arr) arr.push(m);
+      else map.set(m.elderId, [m]);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => {
+        const at = a.matchedAt ?? a.selectedAt;
+        const bt = b.matchedAt ?? b.selectedAt;
+        return bt.localeCompare(at);
+      });
+    }
+    return map;
+  }, [matches]);
 
   const sortedSchedules = useMemo(() => {
     const active: ScheduleResponse[] = [];
@@ -430,10 +499,41 @@ export default function GuardianDashboard() {
           ))}
         </div>
 
-        {/* 등록된 어르신 목록 */}
-        <h2 className="text-gray-700 mb-3" style={{ fontSize: '1rem', fontWeight: 600 }}>등록된 어르신</h2>
+        {/* 등록된 어르신 목록 (FE-5B: 보호자 매칭 현황 연동) */}
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-gray-700" style={{ fontSize: '1rem', fontWeight: 600 }}>등록된 어르신</h2>
+          <button
+            onClick={() => { void loadElders(); void loadMatches(); }}
+            disabled={eldersLoading || matchesLoading}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-emerald-50"
+            style={{ fontSize: '0.75rem', fontWeight: 600 }}
+            aria-label="어르신/매칭 새로고침"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${(eldersLoading || matchesLoading) ? 'animate-spin' : ''}`} />
+            새로고침
+          </button>
+        </div>
 
-        {seniors.length === 0 ? (
+        {eldersLoading ? (
+          <div className="bg-white rounded-3xl p-10 text-center shadow-sm flex items-center justify-center gap-2 text-gray-400">
+            <Loader2 className="w-4 h-4 animate-spin" />
+            <span style={{ fontSize: '0.9rem' }}>어르신 정보를 불러오는 중...</span>
+          </div>
+        ) : eldersError ? (
+          <div className="bg-white rounded-3xl p-6 shadow-sm">
+            <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+              <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{eldersError}</p>
+              <button
+                onClick={() => void loadElders()}
+                className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.8rem', fontWeight: 600 }}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                다시 시도
+              </button>
+            </div>
+          </div>
+        ) : elders.length === 0 ? (
           <div className="bg-white rounded-3xl p-10 text-center shadow-sm">
             <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ backgroundColor: '#E8F8F5' }}>
               <User className="w-8 h-8" style={{ color: '#3DAF8A' }} />
@@ -448,83 +548,169 @@ export default function GuardianDashboard() {
           </div>
         ) : (
           <div className="space-y-4">
-            {seniors.map((senior) => {
-              const device = DEVICE_LABEL[senior.deviceStatus];
-              const recentActivities = senior.activities.slice(0, 3);
-              const totalDone = senior.activities.filter(a => a.done).length;
+            {matchesError && (
+              <div className="rounded-2xl p-3 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-xs" style={{ color: '#B91C1C', fontWeight: 600 }}>{matchesError}</p>
+                <button
+                  onClick={() => void loadMatches()}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-xl"
+                  style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.75rem', fontWeight: 600 }}
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  매칭 정보 다시 시도
+                </button>
+              </div>
+            )}
+            {elders.map((elder) => {
+              const elderMatches = matchesByElder.get(elder.elderId) ?? [];
+              const activeMatches = elderMatches.filter((m) => m.status !== "ENDED");
+              const visibleMatches = activeMatches.length > 0 ? activeMatches : elderMatches.slice(0, 1);
 
               return (
-                <div key={senior.id} className="bg-white rounded-3xl shadow-sm overflow-hidden">
+                <div key={elder.elderId} className="bg-white rounded-3xl shadow-sm overflow-hidden">
                   {/* 어르신 정보 헤더 */}
                   <div className="p-5 border-b border-gray-50">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: '#E5E7EB' }}>
-                          <User className="w-6 h-6 text-gray-400" />
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div
+                          className="w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden"
+                          style={{ backgroundColor: '#E5E7EB' }}
+                        >
+                          {elder.profileImageUrl ? (
+                            <img src={elder.profileImageUrl} alt={`${elder.name} 어르신`} className="w-full h-full object-cover" />
+                          ) : (
+                            <User className="w-6 h-6 text-gray-400" />
+                          )}
                         </div>
-                        <div>
-                          <p className="font-bold text-gray-900">{senior.name} 어르신</p>
-                          <p className="text-gray-500" style={{ fontSize: '0.82rem' }}>{senior.age}세 · {senior.region}</p>
+                        <div className="min-w-0">
+                          <p className="font-bold text-gray-900 truncate">{elder.name} 어르신</p>
+                          <p className="text-gray-500" style={{ fontSize: '0.82rem' }}>
+                            {elder.ageGroup} · {CALL_TYPE_LABEL[elder.preferredCallType]} · 난이도 {DIFFICULTY_LABEL[elder.difficultyLevel]}
+                          </p>
                         </div>
                       </div>
-                      {/* 기기 배송 상태 (F-12) */}
-                      <span className="text-xs px-3 py-1.5 rounded-full" style={{ backgroundColor: device.bg, color: device.color, fontWeight: 600 }}>
+                      <span
+                        className="text-xs px-3 py-1.5 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: '#F3F4F6', color: '#6B7280', fontWeight: 600 }}
+                      >
                         <Tablet className="w-3 h-3 inline mr-1" />
-                        {device.label}
+                        전용 기기
                       </span>
                     </div>
-                  </div>
 
-                  {/* 활동 기록 요약 (F-29) */}
-                  <div className="px-5 py-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-gray-400" />
-                        <p className="font-semibold text-gray-700" style={{ fontSize: '0.88rem' }}>
-                          활동 기록 <span className="text-gray-400 font-normal">({totalDone}/{senior.activities.length}회 진행)</span>
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => openRecords(senior)}
-                        className="flex items-center gap-1 text-xs font-semibold"
-                        style={{ color: '#3DAF8A' }}
-                      >
-                        전체 보기 <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    {recentActivities.length === 0 ? (
-                      <p className="text-gray-400 text-sm py-2">아직 기록된 활동이 없어요</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {recentActivities.map((act) => (
-                          <div key={act.id} className="flex items-center gap-3 px-3 py-2.5 rounded-2xl" style={{ backgroundColor: '#FAF8F5' }}>
-                            {act.done
-                              ? <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: '#3DAF8A' }} />
-                              : <XCircle className="w-4 h-4 flex-shrink-0 text-gray-300" />
-                            }
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-gray-700" style={{ fontSize: '0.83rem', fontWeight: 600 }}>{act.date}</span>
-                                <span className="text-gray-500" style={{ fontSize: '0.78rem' }}>
-                                  {act.done ? `${act.duration}분 · ${act.youthName}` : "진행 안됨"}
-                                </span>
-                              </div>
-                              {act.note && (
-                                <p className="text-gray-400 truncate mt-0.5" style={{ fontSize: '0.75rem' }}>{act.note}</p>
-                              )}
-                            </div>
-                          </div>
+                    {elder.interests && elder.interests.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {elder.interests.slice(0, 6).map((tag) => (
+                          <span
+                            key={tag}
+                            className="text-xs px-2.5 py-1 rounded-full"
+                            style={{ backgroundColor: '#FFF1E5', color: '#C2410C', fontWeight: 600 }}
+                          >
+                            #{tag}
+                          </span>
                         ))}
                       </div>
                     )}
                   </div>
 
-                  {/* 신고 버튼 (F-31) */}
-                  <div className="px-5 pb-4 pt-0">
+                  {/* 매칭 현황 */}
+                  <div className="px-5 py-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <UserCheck className="w-4 h-4 text-gray-400" />
+                        <p className="font-semibold text-gray-700" style={{ fontSize: '0.88rem' }}>
+                          매칭된 청년
+                          {elderMatches.length > 0 && (
+                            <span className="text-gray-400 font-normal"> ({elderMatches.length}건)</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+
+                    {matchesLoading && elderMatches.length === 0 ? (
+                      <div className="flex items-center gap-2 py-2 text-gray-400">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span style={{ fontSize: '0.82rem' }}>매칭 정보를 불러오는 중...</span>
+                      </div>
+                    ) : visibleMatches.length === 0 ? (
+                      <div className="rounded-2xl px-4 py-3 text-center text-gray-400" style={{ backgroundColor: '#FAF8F5', border: '1.5px dashed #E5E7EB' }}>
+                        <p style={{ fontSize: '0.85rem', fontWeight: 600 }}>아직 매칭된 청년이 없습니다</p>
+                        <p style={{ fontSize: '0.75rem' }} className="mt-0.5">
+                          청년이 어르신을 선택하면 여기에 표시됩니다.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {visibleMatches.map((m) => {
+                          const status = MATCH_STATUS_LABEL[m.status];
+                          const matchedAtText = formatMatchedAt(m.matchedAt ?? m.selectedAt);
+                          return (
+                            <div
+                              key={m.matchId}
+                              className="rounded-2xl p-3"
+                              style={{ backgroundColor: '#FAF8F5', border: '1.5px solid #F3F4F6' }}
+                            >
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-sm" style={{ backgroundColor: '#FFE8D6' }}>🧑</div>
+                                  <div className="min-w-0">
+                                    <p className="font-semibold text-gray-900 truncate" style={{ fontSize: '0.88rem' }}>
+                                      {m.youthName} 청년
+                                    </p>
+                                    {matchedAtText && (
+                                      <p className="text-gray-400" style={{ fontSize: '0.72rem' }}>
+                                        {m.matchedAt ? '매칭 일시' : '선택 일시'} · {matchedAtText}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                                <span
+                                  className="text-xs px-2.5 py-0.5 rounded-full flex-shrink-0"
+                                  style={{ backgroundColor: status.bg, color: status.color, fontWeight: 600 }}
+                                >
+                                  {status.label}
+                                </span>
+                              </div>
+
+                              {m.icebreakingMessage && (
+                                <div className="flex items-start gap-1.5 px-2.5 py-2 rounded-xl bg-white" style={{ border: '1px solid #F3F4F6' }}>
+                                  <MessageCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={{ color: '#3DAF8A' }} />
+                                  <p className="text-gray-600 line-clamp-2" style={{ fontSize: '0.78rem' }}>
+                                    {m.icebreakingMessage}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 후속 기능 버튼 — 신고/활동 기록은 다음 단계 */}
+                  <div className="px-5 pb-4 pt-0 flex flex-wrap gap-2">
                     <button
-                      onClick={() => openReport(senior)}
-                      className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border"
+                      type="button"
+                      onClick={() => toast.message("활동 기록 보기는 다음 단계에서 연결 예정입니다.")}
+                      className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border text-gray-500"
+                      style={{ borderColor: '#E5E7EB', fontWeight: 600 }}
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" /> 활동 기록 보기
+                    </button>
+                    {visibleMatches.length > 0 && visibleMatches.some((m) => m.status !== "ENDED") && (
+                      <button
+                        type="button"
+                        onClick={() => toast.message("매칭 중단 요청은 다음 단계에서 연결 예정입니다.")}
+                        className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border text-gray-500"
+                        style={{ borderColor: '#E5E7EB', fontWeight: 600 }}
+                      >
+                        매칭 중단 요청
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => openReport(elder)}
+                      className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border ml-auto"
                       style={{ borderColor: '#FECACA', color: '#EF4444', fontWeight: 600 }}
                     >
                       <Flag className="w-3.5 h-3.5" /> 신고하기
@@ -880,75 +1066,7 @@ export default function GuardianDashboard() {
         </div>
       </div>
 
-      {/* 전체 활동 기록 다이얼로그 (F-29) */}
-      <Dialog open={recordDialogOpen} onOpenChange={setRecordDialogOpen}>
-        <DialogContent className="rounded-3xl max-w-md max-h-[80vh] overflow-y-auto border-0 shadow-2xl" aria-describedby={undefined}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" style={{ color: '#3DAF8A' }} />
-              {selectedSenior?.name} 어르신 활동 기록
-            </DialogTitle>
-          </DialogHeader>
-
-          {selectedSenior && selectedSenior.activities.length === 0 && (
-            <div className="py-8 text-center text-gray-400">
-              <Clock className="w-10 h-10 mx-auto mb-2 opacity-30" />
-              <p style={{ fontSize: '0.9rem' }}>아직 활동 기록이 없습니다</p>
-            </div>
-          )}
-
-          {selectedSenior && selectedSenior.activities.length > 0 && (
-            <div className="space-y-3 mt-2">
-              {/* 요약 */}
-              <div className="grid grid-cols-3 gap-2 mb-4">
-                {[
-                  { label: "전체 횟수", value: `${selectedSenior.activities.length}회` },
-                  { label: "진행 완료", value: `${selectedSenior.activities.filter(a => a.done).length}회` },
-                  { label: "누적 시간", value: `${selectedSenior.activities.filter(a => a.done).reduce((s, a) => s + (a.duration ?? 0), 0)}분` },
-                ].map((stat) => (
-                  <div key={stat.label} className="rounded-2xl p-3 text-center" style={{ backgroundColor: '#E8F8F5' }}>
-                    <p className="font-bold text-gray-800" style={{ fontSize: '1rem' }}>{stat.value}</p>
-                    <p className="text-gray-500 mt-0.5" style={{ fontSize: '0.72rem' }}>{stat.label}</p>
-                  </div>
-                ))}
-              </div>
-
-              {selectedSenior.activities.map((act) => (
-                <div key={act.id} className="rounded-2xl p-4" style={{ backgroundColor: '#FAF8F5', border: '1px solid #F3F4F6' }}>
-                  <div className="flex items-center gap-2 mb-1">
-                    {act.done
-                      ? <CheckCircle className="w-4 h-4" style={{ color: '#3DAF8A' }} />
-                      : <XCircle className="w-4 h-4 text-gray-300" />
-                    }
-                    <span className="font-semibold text-gray-800" style={{ fontSize: '0.88rem' }}>{act.date}</span>
-                    <span
-                      className="text-xs px-2 py-0.5 rounded-full ml-auto"
-                      style={act.done
-                        ? { backgroundColor: '#E8F8F5', color: '#3DAF8A', fontWeight: 600 }
-                        : { backgroundColor: '#F3F4F6', color: '#9CA3AF', fontWeight: 600 }}
-                    >
-                      {act.done ? "진행 완료" : "진행 안됨"}
-                    </span>
-                  </div>
-                  {act.done && (
-                    <p className="text-gray-500 ml-6" style={{ fontSize: '0.82rem' }}>
-                      {act.youthName} · {act.duration}분
-                    </p>
-                  )}
-                  {act.note && (
-                    <div className="mt-2 ml-6 flex items-start gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 text-orange-300 flex-shrink-0 mt-0.5" />
-                      <p className="text-gray-500" style={{ fontSize: '0.8rem' }}>{act.note}</p>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* F-31 신고하기 다이얼로그 */}
+      {/* F-31 신고하기 다이얼로그 (placeholder — 신고 API 미연결) */}
       <Dialog open={reportOpen} onOpenChange={setReportOpen}>
         <DialogContent className="max-w-sm rounded-3xl border-0 shadow-2xl" aria-describedby={undefined}>
           <DialogHeader>
