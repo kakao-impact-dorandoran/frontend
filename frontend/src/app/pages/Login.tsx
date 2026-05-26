@@ -5,7 +5,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
-import { Heart, Clock, Ban, XCircle, User, Shield, UserCog, Tv } from "lucide-react";
+import { Heart, Clock, Ban, XCircle, User, Shield, UserCog, Tv, Server } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth/AuthContext";
 import { routeForRole } from "../../lib/auth/routes";
@@ -15,6 +15,11 @@ import {
   findDemoAccount,
   type DemoAccountDefinition,
 } from "../../lib/auth/demo";
+import {
+  SEED_ACCOUNTS,
+  SEED_ACCOUNT_PASSWORD,
+  type SeedAccountDefinition,
+} from "../../lib/auth/seedAccounts";
 import { ApiError } from "../../lib/api/client";
 import { ErrorCode } from "../../types/api";
 
@@ -23,10 +28,16 @@ const SHOW_DEMO_ACCOUNTS =
 
 const DEMO_FILL_PASSWORD = "demo";
 
-function iconForAccount(account: DemoAccountDefinition): typeof User {
+function iconForDemoAccount(account: DemoAccountDefinition): typeof User {
   if (account.redirectTo === "/senior") return Tv;
   if (account.user?.role === "ADMIN") return UserCog;
   if (account.user?.role === "GUARDIAN") return Shield;
+  return User;
+}
+
+function iconForSeedAccount(account: SeedAccountDefinition): typeof User {
+  if (account.role === "ADMIN") return UserCog;
+  if (account.role === "GUARDIAN") return Shield;
   return User;
 }
 
@@ -140,6 +151,13 @@ export default function Login() {
     toast.success(`${account.label} 시연 계정을 입력했습니다.`);
   };
 
+  // 로컬 시연용 seed 계정 자동입력. 로그인 버튼 클릭 시 기존 백엔드 login() 흐름을 그대로 탄다.
+  const handleFillSeedAccount = (account: SeedAccountDefinition) => {
+    setEmail(account.email);
+    setPassword(SEED_ACCOUNT_PASSWORD);
+    toast.success(`${account.label} (백엔드 seed) 계정을 입력했습니다.`);
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{ fontFamily: 'Pretendard, sans-serif', backgroundColor: '#FAF8F5' }}>
       <div className="w-full max-w-md">
@@ -235,21 +253,20 @@ export default function Login() {
         {SHOW_DEMO_ACCOUNTS && (
           <Card className="mt-4 rounded-3xl border-0 shadow-md">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">프론트 단독 데모 모드</CardTitle>
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4" style={{ color: "#FF8A3D" }} />
+                <CardTitle className="text-base">백엔드 시드 계정</CardTitle>
+              </div>
               <CardDescription className="text-xs">
-                백엔드 없이 화면 흐름을 확인하기 위한 계정입니다.
-                {" "}
-                <code>VITE_ENABLE_DEMO_LOGIN=true</code>일 때만 동작합니다.
-                {!DEMO_LOGIN_ENABLED && (
-                  <span className="block mt-1 text-amber-600">
-                    현재 데모 로그인은 꺼져 있습니다. 입력하기를 눌러도 백엔드 로그인이 실행됩니다.
-                  </span>
-                )}
+                로컬 백엔드가 실행 중일 때 실제 API 로그인으로 진입합니다.
+                <span className="block mt-1 text-gray-400">
+                  비밀번호는 로컬 seed 값(<code>test1234!</code>)이며 자동 입력됩니다.
+                </span>
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              {DEMO_ACCOUNTS.map((account) => {
-                const Icon = iconForAccount(account);
+              {SEED_ACCOUNTS.map((account) => {
+                const Icon = iconForSeedAccount(account);
                 return (
                   <div
                     key={account.email}
@@ -280,6 +297,60 @@ export default function Login() {
                       variant="outline"
                       size="sm"
                       className="rounded-xl shrink-0"
+                      onClick={() => handleFillSeedAccount(account)}
+                    >
+                      입력하기
+                    </Button>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+        )}
+
+        {SHOW_DEMO_ACCOUNTS && DEMO_LOGIN_ENABLED && (
+          <Card className="mt-4 rounded-3xl border-0 shadow-md">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm text-gray-600">프론트 단독 데모 모드</CardTitle>
+              <CardDescription className="text-xs">
+                백엔드 없이 화면 흐름을 확인하기 위한 <code>@demo.com</code> 계정입니다.
+                {" "}
+                <code>VITE_ENABLE_DEMO_LOGIN=true</code>일 때만 동작합니다.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {DEMO_ACCOUNTS.map((account) => {
+                const Icon = iconForDemoAccount(account);
+                return (
+                  <div
+                    key={account.email}
+                    className="flex items-start gap-3 rounded-2xl p-3"
+                    style={{ backgroundColor: "#F5F5F5", border: "1px solid #E5E5E5" }}
+                  >
+                    <div
+                      className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: "#E5E5E5" }}
+                    >
+                      <Icon className="w-4 h-4 text-gray-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">
+                          {account.label}
+                        </span>
+                        <span className="text-xs text-gray-500 truncate">
+                          {account.email}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {account.description}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-xl shrink-0"
                       onClick={() => handleFillDemoAccount(account)}
                     >
                       입력하기
@@ -287,10 +358,6 @@ export default function Login() {
                   </div>
                 );
               })}
-              <p className="text-[11px] text-gray-400 pt-1">
-                실제 비밀번호는 코드/저장소에 두지 않습니다. 로컬에서는 <code>.env.development.local</code> 에
-                {" "}<code>VITE_ENABLE_DEMO_LOGIN=true</code> 를 추가해 사용하세요.
-              </p>
             </CardContent>
           </Card>
         )}
