@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -120,6 +120,10 @@ const NOTES_MAX = 500;
 
 export default function YouthActivityJournal() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prefillCallLogId = searchParams.get("callLogId");
+  const prefillScheduleId = searchParams.get("scheduleId");
+  const prefillDuration = searchParams.get("durationMinutes");
 
   const [records, setRecords] = useState<ActivityRecordSummaryResponse[]>([]);
   const [recordsLoading, setRecordsLoading] = useState(false);
@@ -133,6 +137,7 @@ export default function YouthActivityJournal() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
   const [scheduleId, setScheduleId] = useState<string>("");
+  const [callLogId, setCallLogId] = useState<string | null>(null);
   const [durationInput, setDurationInput] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
@@ -219,6 +224,33 @@ export default function YouthActivityJournal() {
   }, [writing, recordableSchedules, scheduleId]);
 
   useEffect(() => {
+    if (refsLoading) return;
+    if (!prefillCallLogId && !prefillScheduleId && !prefillDuration) return;
+    setWriting(true);
+    if (prefillCallLogId) setCallLogId(prefillCallLogId);
+    if (prefillScheduleId && recordableSchedules.some((s) => s.scheduleId === prefillScheduleId)) {
+      setScheduleId(prefillScheduleId);
+    }
+    if (prefillDuration && /^\d+$/.test(prefillDuration)) {
+      setDurationInput(prefillDuration);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("callLogId");
+    next.delete("matchId");
+    next.delete("scheduleId");
+    next.delete("durationMinutes");
+    setSearchParams(next, { replace: true });
+  }, [
+    refsLoading,
+    prefillCallLogId,
+    prefillScheduleId,
+    prefillDuration,
+    recordableSchedules,
+    searchParams,
+    setSearchParams,
+  ]);
+
+  useEffect(() => {
     if (!selectedSchedule) {
       setDurationInput("");
       return;
@@ -230,6 +262,7 @@ export default function YouthActivityJournal() {
   const resetForm = useCallback(() => {
     setWriting(false);
     setScheduleId("");
+    setCallLogId(null);
     setDurationInput("");
     setNotes("");
   }, []);
@@ -255,6 +288,7 @@ export default function YouthActivityJournal() {
       await createActivityRecord({
         matchId: selectedSchedule.matchId,
         scheduleId: selectedSchedule.scheduleId,
+        callLogId: callLogId ?? null,
         isCompleted: true,
         durationMinutes: Math.round(duration),
         notes: trimmedNotes ? trimmedNotes : null,
@@ -267,7 +301,7 @@ export default function YouthActivityJournal() {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedSchedule, notes, durationInput, resetForm, loadRecords]);
+  }, [selectedSchedule, notes, durationInput, callLogId, resetForm, loadRecords]);
 
   const totalRecordedMinutes = useMemo(() => {
     return records.reduce((sum, r) => sum + (r.durationMinutes ?? 0), 0);
@@ -405,6 +439,11 @@ export default function YouthActivityJournal() {
                       <span className="font-semibold">{selectedSchedule.elderName}</span> 어르신과의{' '}
                       {selectedSchedule.scheduledStartAt.slice(0, 10)} 일정에 대한 기록입니다.
                     </p>
+                    {callLogId && (
+                      <p className="text-gray-500 mt-1" style={{ fontSize: '0.72rem' }}>
+                        통화 기록 연결됨 · ID <span className="font-mono">{callLogId.slice(0, 8)}</span>
+                      </p>
+                    )}
                   </div>
                 )}
 
