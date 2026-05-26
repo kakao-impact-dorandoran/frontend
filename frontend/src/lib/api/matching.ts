@@ -1,12 +1,13 @@
 /**
  * Matching API 호출 wrapper.
  * 백엔드 컨트롤러 매핑:
- *  - GET /api/v1/matching/elders             : 청년용 매칭 가능 어르신 목록
- *  - GET /api/v1/matching/elders/{elderId}   : 청년용 어르신 상세
- *  - GET /api/v1/matches/limit/me            : 청년 담당 인원 제한 현황
- *  - POST /api/v1/matches                    : 사전 인사말 기반 매칭 생성
- *  - GET /api/v1/matches/my                  : 내 매칭 목록 (YOUTH/GUARDIAN)
- *  - GET /api/v1/matches/{matchId}           : 매칭 상세 조회
+ *  - GET /api/v1/matching/elders                                 : 청년용 매칭 가능 어르신 목록
+ *  - GET /api/v1/matching/elders/{elderId}                       : 청년용 어르신 상세
+ *  - GET /api/v1/matches/limit/me                                : 청년 담당 인원 제한 현황
+ *  - POST /api/v1/matches                                        : 사전 인사말 기반 매칭 생성
+ *  - GET /api/v1/matches/my                                      : 내 매칭 목록 (YOUTH/GUARDIAN)
+ *  - GET /api/v1/matches/{matchId}                               : 매칭 상세 조회
+ *  - POST /api/v1/matches/{matchId}/termination-requests         : 매칭 중단 요청 (YOUTH/GUARDIAN)
  */
 
 import type {
@@ -14,6 +15,8 @@ import type {
   MatchDetailResponse,
   MatchResponse,
   MatchSummaryResponse,
+  MatchTerminationCreateRequest,
+  MatchTerminationResponse,
   MatchingElderDetailResponse,
   MatchingElderListParams,
   MatchingElderListResponse,
@@ -66,5 +69,15 @@ export function getMatchDetail(matchId: string): Promise<MatchDetailResponse> {
   return apiRequest<MatchDetailResponse>(
     `/api/v1/matches/${encodeURIComponent(matchId)}`,
     { method: "GET", auth: "bearer" },
+  );
+}
+
+export function createMatchTerminationRequest(
+  matchId: string,
+  body: MatchTerminationCreateRequest,
+): Promise<MatchTerminationResponse> {
+  return apiRequest<MatchTerminationResponse>(
+    `/api/v1/matches/${encodeURIComponent(matchId)}/termination-requests`,
+    { method: "POST", auth: "bearer", body },
   );
 }
