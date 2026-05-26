@@ -21,7 +21,9 @@ import {
   getElderAvailableTimes,
 } from "../../lib/api/availableTime";
 import { getMySchedules } from "../../lib/api/schedule";
+import { getActivityRecords } from "../../lib/api/activityRecord";
 import type {
+  ActivityRecordSummaryResponse,
   AvailableTimeResponse,
   CallType,
   DifficultyLevel,
@@ -132,6 +134,18 @@ function resolveAvailLoadError(err: unknown): string {
   return "가능 시간을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
 }
 
+function resolveActivityLoadError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "활동 기록을 조회할 권한이 없습니다.";
+    }
+    return err.message || "활동 기록을 불러오지 못했습니다.";
+  }
+  return "활동 기록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
 function resolveScheduleLoadError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
@@ -162,6 +176,23 @@ function formatScheduleRange(startStr: string, endStr: string): string {
   }
   const dt = new Date(y, m - 1, d);
   return `${MONTH_DAY_FORMATTER.format(dt)} ${startTime} ~ ${endTime}`;
+}
+
+const JOURNAL_DATE_FORMATTER = new Intl.DateTimeFormat("ko-KR", {
+  month: "long",
+  day: "numeric",
+});
+
+function formatJournalDate(value: string | null): string {
+  if (!value) return "";
+  const { date } = splitLocalDateTime(value);
+  const [y, m, d] = date.split("-").map((n) => Number(n));
+  if (!y || !m || !d) return value;
+  return JOURNAL_DATE_FORMATTER.format(new Date(y, m - 1, d));
+}
+
+function formatJournalDuration(record: ActivityRecordSummaryResponse): string {
+  return record.durationMinutes != null ? `${record.durationMinutes}분` : "-";
 }
 
 function resolveTerminationRequestError(err: unknown): string {
@@ -242,6 +273,10 @@ export default function GuardianDashboard() {
   const [schedulesLoading, setSchedulesLoading] = useState(false);
   const [schedulesError, setSchedulesError] = useState<string | null>(null);
 
+  const [activityRecords, setActivityRecords] = useState<ActivityRecordSummaryResponse[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
+
   // FE-5C 매칭 상세 Dialog
   const [activeMatchSummary, setActiveMatchSummary] = useState<MatchSummaryResponse | null>(null);
   const [matchDetail, setMatchDetail] = useState<MatchDetailResponse | null>(null);
@@ -261,25 +296,8 @@ export default function GuardianDashboard() {
   const [reportContent, setReportContent] = useState("");
 
   const [journalDialogOpen, setJournalDialogOpen] = useState(false);
-  const [journalYear, setJournalYear] = useState("2026");
-  const [journalMonth, setJournalMonth] = useState("5월");
-
-  const JOURNALS = [
-    { youth: "최윤정", year: "2026", month: "5월", date: "5월 20일", duration: "32분", type: "화상통화", content: "오늘 어머니께서 옛날 이야기를 많이 해주셨어요. 어린 시절 시골에서 살았던 이야기가 정말 재미있었습니다. 다음에는 좋아하시는 음식 이야기를 더 나눠보고 싶어요." },
-    { youth: "최윤정", year: "2026", month: "5월", date: "5월 13일", duration: "28분", type: "음성통화", content: "건강에 대해 이야기 나눴어요. 요즘 날씨 때문에 무릎이 아프시다고 하셔서 걱정이 됐어요. 다음에 통화 시작할 때 꼭 안부를 여쭤봐야겠어요." },
-    { youth: "최윤정", year: "2026", month: "5월", date: "5월 6일", duration: "35분", type: "화상통화", content: "어린 시절 즐겨 드시던 음식 이야기를 나눴어요. 된장찌개 이야기에 눈이 반짝이셨어요. 다음엔 함께 레시피 이야기도 해보고 싶어요." },
-    { youth: "최윤정", year: "2026", month: "4월", date: "4월 29일", duration: "22분", type: "음성통화", content: "날씨가 좋아서 기분이 좋으시다고 하셨어요. 봄꽃 이야기를 많이 하셨는데 정원 가꾸기를 좋아하신다는 것을 알게 됐어요." },
-    { youth: "최윤정", year: "2026", month: "4월", date: "4월 22일", duration: "40분", type: "화상통화", content: "자녀분들 이야기를 많이 해주셨어요. 멀리 사는 아들이 보고 싶으시다고 하셨는데 많이 마음이 쓰였어요." },
-    { youth: "최윤정", year: "2026", month: "4월", date: "4월 15일", duration: "30분", type: "화상통화", content: "어머니께서 좋아하시는 노래 이야기를 나눴어요. 같이 흥얼거리며 즐거운 시간을 보냈습니다." },
-    { youth: "최윤정", year: "2026", month: "3월", date: "3월 25일", duration: "45분", type: "화상통화", content: "첫 통화라 긴장됐는데 어머니께서 먼저 편하게 대해주셔서 금방 친해졌어요. 다음이 기대됩니다." },
-    { youth: "최윤정", year: "2026", month: "3월", date: "3월 18일", duration: "20분", type: "음성통화", content: "짧은 통화였지만 오늘 드신 점심 메뉴 이야기를 나눴어요. 소소하지만 따뜻한 대화였습니다." },
-    { youth: "최윤정", year: "2025", month: "12월", date: "12월 30일", duration: "38분", type: "화상통화", content: "연말이라 한 해 이야기를 나눴어요. 올해 좋았던 순간들을 함께 돌아봤습니다." },
-    { youth: "최윤정", year: "2025", month: "12월", date: "12월 16일", duration: "25분", type: "음성통화", content: "크리스마스 이야기를 나눴어요. 어머니의 어린 시절 크리스마스 추억이 참 따뜻했어요." },
-    { youth: "최윤정", year: "2025", month: "11월", date: "11월 28일", duration: "33분", type: "화상통화", content: "날이 추워지셨다고 걱정이 됐어요. 따뜻하게 입고 다니시라고 말씀드렸습니다." },
-  ];
-  const journalYears = [...new Set(JOURNALS.map(j => j.year))];
-  const monthsInYear = [...new Set(JOURNALS.filter(j => j.year === journalYear).map(j => j.month))];
-  const filteredJournals = JOURNALS.filter(j => j.year === journalYear && j.month === journalMonth);
+  const [journalYear, setJournalYear] = useState<string | null>(null);
+  const [journalMonth, setJournalMonth] = useState<string | null>(null);
 
   const openReport = (elder: ElderResponse) => {
     setReportTarget(elder);
@@ -382,6 +400,26 @@ export default function GuardianDashboard() {
     }
   }, [user]);
 
+  const loadActivityRecords = useCallback(async () => {
+    if (!user) {
+      setActivityRecords([]);
+      setActivityError(null);
+      setActivityLoading(false);
+      return;
+    }
+    setActivityLoading(true);
+    setActivityError(null);
+    try {
+      const list = await getActivityRecords();
+      setActivityRecords(list ?? []);
+    } catch (err) {
+      setActivityRecords([]);
+      setActivityError(resolveActivityLoadError(err));
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [user]);
+
   useEffect(() => {
     void loadElders();
   }, [loadElders]);
@@ -397,6 +435,10 @@ export default function GuardianDashboard() {
   useEffect(() => {
     void loadSchedules();
   }, [loadSchedules]);
+
+  useEffect(() => {
+    void loadActivityRecords();
+  }, [loadActivityRecords]);
 
   const matchesByElder = useMemo(() => {
     const map = new Map<string, MatchSummaryResponse[]>();
@@ -414,6 +456,50 @@ export default function GuardianDashboard() {
     }
     return map;
   }, [matches]);
+
+  const sortedActivityRecords = useMemo(() => {
+    return activityRecords.slice().sort((a, b) => {
+      const aKey = a.actualStartAt ?? a.createdAt;
+      const bKey = b.actualStartAt ?? b.createdAt;
+      return bKey.localeCompare(aKey);
+    });
+  }, [activityRecords]);
+
+  const journalsByYearMonth = useMemo(() => {
+    const map = new Map<string, Map<string, ActivityRecordSummaryResponse[]>>();
+    for (const r of sortedActivityRecords) {
+      const base = r.actualStartAt ?? r.createdAt;
+      const [y, m] = base.split("T")[0].split("-");
+      if (!y || !m) continue;
+      const yearKey = y;
+      const monthKey = `${Number(m)}월`;
+      let yearMap = map.get(yearKey);
+      if (!yearMap) {
+        yearMap = new Map();
+        map.set(yearKey, yearMap);
+      }
+      const arr = yearMap.get(monthKey);
+      if (arr) arr.push(r);
+      else yearMap.set(monthKey, [r]);
+    }
+    return map;
+  }, [sortedActivityRecords]);
+
+  const journalYears = useMemo(() => Array.from(journalsByYearMonth.keys()), [journalsByYearMonth]);
+  const activeJournalYear = journalYear && journalsByYearMonth.has(journalYear)
+    ? journalYear
+    : journalYears[0] ?? null;
+  const monthsInYear = useMemo(() => {
+    if (!activeJournalYear) return [] as string[];
+    return Array.from(journalsByYearMonth.get(activeJournalYear)?.keys() ?? []);
+  }, [activeJournalYear, journalsByYearMonth]);
+  const activeJournalMonth = journalMonth && monthsInYear.includes(journalMonth)
+    ? journalMonth
+    : monthsInYear[0] ?? null;
+  const filteredJournals = useMemo(() => {
+    if (!activeJournalYear || !activeJournalMonth) return [] as ActivityRecordSummaryResponse[];
+    return journalsByYearMonth.get(activeJournalYear)?.get(activeJournalMonth) ?? [];
+  }, [activeJournalYear, activeJournalMonth, journalsByYearMonth]);
 
   const sortedSchedules = useMemo(() => {
     const active: ScheduleResponse[] = [];
@@ -607,32 +693,89 @@ export default function GuardianDashboard() {
           </div>
         </div>
 
-        {/* 청년 활동 일지 (F-29) */}
+        {/* 청년 활동 일지 (FE-5E: 보호자 활동 기록 조회 연동) */}
         <div className="flex items-center justify-between mb-3 mt-2">
           <h2 className="text-gray-700" style={{ fontSize: '1rem', fontWeight: 600 }}>청년 활동 일지</h2>
-          <button
-            onClick={() => setJournalDialogOpen(true)}
-            className="flex items-center gap-1 text-xs font-semibold"
-            style={{ color: '#3DAF8A' }}
-          >
-            전체 보기 <ChevronRight className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void loadActivityRecords()}
+              disabled={activityLoading}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-emerald-50"
+              style={{ fontSize: '0.72rem', fontWeight: 600 }}
+              aria-label="활동 일지 새로고침"
+            >
+              <RefreshCw className={`w-3 h-3 ${activityLoading ? 'animate-spin' : ''}`} />
+              새로고침
+            </button>
+            <button
+              onClick={() => setJournalDialogOpen(true)}
+              disabled={sortedActivityRecords.length === 0}
+              className="flex items-center gap-1 text-xs font-semibold disabled:opacity-50"
+              style={{ color: '#3DAF8A' }}
+            >
+              전체 보기 <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
         <div className="mb-6 space-y-3">
-          {JOURNALS.slice(0, 2).map((j, idx) => (
-            <div key={idx} className="bg-white rounded-3xl shadow-sm p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ backgroundColor: '#FFE8D6' }}>🧑</div>
-                <div>
-                  <p className="font-semibold text-gray-900" style={{ fontSize: '0.88rem' }}>{j.youth} 청년</p>
-                  <p className="text-gray-400" style={{ fontSize: '0.75rem' }}>{j.date} · {j.duration} · {j.type}</p>
-                </div>
-              </div>
-              <div className="rounded-2xl px-4 py-3" style={{ backgroundColor: '#FAF8F5' }}>
-                <p className="text-gray-600 leading-relaxed line-clamp-2" style={{ fontSize: '0.85rem' }}>{j.content}</p>
+          {activityLoading && sortedActivityRecords.length === 0 ? (
+            <div className="bg-white rounded-3xl p-6 text-center shadow-sm flex items-center justify-center gap-2 text-gray-400">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span style={{ fontSize: '0.88rem' }}>활동 기록을 불러오는 중...</span>
+            </div>
+          ) : activityError ? (
+            <div className="bg-white rounded-3xl p-5 shadow-sm">
+              <div className="rounded-2xl p-3 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{activityError}</p>
+                <button
+                  onClick={() => void loadActivityRecords()}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                  style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.78rem', fontWeight: 600 }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  다시 시도
+                </button>
               </div>
             </div>
-          ))}
+          ) : sortedActivityRecords.length === 0 ? (
+            <div className="bg-white rounded-3xl p-8 text-center shadow-sm">
+              <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3" style={{ backgroundColor: '#E8F8F5' }}>
+                <BookOpen className="w-6 h-6" style={{ color: '#3DAF8A' }} />
+              </div>
+              <p className="text-gray-700 font-semibold mb-1" style={{ fontSize: '0.9rem' }}>아직 작성된 활동 일지가 없어요</p>
+              <p className="text-gray-400" style={{ fontSize: '0.78rem' }}>
+                청년이 대화 후 활동 일지를 작성하면 여기에 표시됩니다.
+              </p>
+            </div>
+          ) : (
+            sortedActivityRecords.slice(0, 2).map((r) => (
+              <div key={r.activityRecordId} className="bg-white rounded-3xl shadow-sm p-5">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm flex-shrink-0" style={{ backgroundColor: '#FFE8D6' }}>🧑</div>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-900 truncate" style={{ fontSize: '0.88rem' }}>
+                      {r.youthName ? `${r.youthName} 청년` : '청년'}
+                      <span className="ml-1 text-gray-400 font-normal" style={{ fontSize: '0.78rem' }}>
+                        · {r.elderName} 어르신
+                      </span>
+                    </p>
+                    <p className="text-gray-400" style={{ fontSize: '0.75rem' }}>
+                      {formatJournalDate(r.actualStartAt ?? r.createdAt)} · {formatJournalDuration(r)}
+                    </p>
+                  </div>
+                </div>
+                {r.notes ? (
+                  <div className="rounded-2xl px-4 py-3" style={{ backgroundColor: '#FAF8F5' }}>
+                    <p className="text-gray-600 leading-relaxed line-clamp-2" style={{ fontSize: '0.85rem' }}>{r.notes}</p>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl px-4 py-2.5" style={{ backgroundColor: '#FAF8F5' }}>
+                    <p className="text-gray-400" style={{ fontSize: '0.82rem' }}>청년이 작성한 메모가 없어요.</p>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
         </div>
 
         {/* 등록된 어르신 목록 (FE-5B: 보호자 매칭 현황 연동) */}
@@ -1297,14 +1440,14 @@ export default function GuardianDashboard() {
                 key={y}
                 onClick={() => {
                   setJournalYear(y);
-                  const firstMonth = [...new Set(JOURNALS.filter(j => j.year === y).map(j => j.month))][0];
+                  const firstMonth = Array.from(journalsByYearMonth.get(y)?.keys() ?? [])[0] ?? null;
                   setJournalMonth(firstMonth);
                 }}
                 className="px-4 py-1.5 rounded-full text-sm border-2 transition-colors flex-shrink-0 font-semibold"
                 style={{
-                  borderColor: journalYear === y ? '#3DAF8A' : '#E5E7EB',
-                  backgroundColor: journalYear === y ? '#3DAF8A' : 'white',
-                  color: journalYear === y ? 'white' : '#6B7280',
+                  borderColor: activeJournalYear === y ? '#3DAF8A' : '#E5E7EB',
+                  backgroundColor: activeJournalYear === y ? '#3DAF8A' : 'white',
+                  color: activeJournalYear === y ? 'white' : '#6B7280',
                 }}
               >{y}년</button>
             ))}
@@ -1312,31 +1455,35 @@ export default function GuardianDashboard() {
 
           {/* 월 탭 */}
           <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
-            {monthsInYear.map(m => (
-              <button
-                key={m}
-                onClick={() => setJournalMonth(m)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border-2 transition-colors flex-shrink-0"
-                style={{
-                  borderColor: journalMonth === m ? '#3DAF8A' : '#E5E7EB',
-                  backgroundColor: journalMonth === m ? '#E8F8F5' : 'white',
-                  color: journalMonth === m ? '#3DAF8A' : '#6B7280',
-                  fontWeight: journalMonth === m ? 700 : 400,
-                }}
-              >
-                {m}
-                <span
-                  className="px-1.5 py-0.5 rounded-full text-xs"
+            {monthsInYear.map(m => {
+              const monthCount = journalsByYearMonth.get(activeJournalYear ?? "")?.get(m)?.length ?? 0;
+              const active = activeJournalMonth === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => setJournalMonth(m)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border-2 transition-colors flex-shrink-0"
                   style={{
-                    backgroundColor: journalMonth === m ? '#3DAF8A' : '#F3F4F6',
-                    color: journalMonth === m ? 'white' : '#9CA3AF',
-                    fontWeight: 700,
+                    borderColor: active ? '#3DAF8A' : '#E5E7EB',
+                    backgroundColor: active ? '#E8F8F5' : 'white',
+                    color: active ? '#3DAF8A' : '#6B7280',
+                    fontWeight: active ? 700 : 400,
                   }}
                 >
-                  {JOURNALS.filter(j => j.year === journalYear && j.month === m).length}
-                </span>
-              </button>
-            ))}
+                  {m}
+                  <span
+                    className="px-1.5 py-0.5 rounded-full text-xs"
+                    style={{
+                      backgroundColor: active ? '#3DAF8A' : '#F3F4F6',
+                      color: active ? 'white' : '#9CA3AF',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {monthCount}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           {/* 해당 월 일지 목록 */}
@@ -1344,16 +1491,27 @@ export default function GuardianDashboard() {
             {filteredJournals.length === 0 ? (
               <div className="py-8 text-center text-gray-400" style={{ fontSize: '0.9rem' }}>이 달에 작성된 일지가 없어요</div>
             ) : (
-              filteredJournals.map((j, idx) => (
-                <div key={idx} className="rounded-2xl p-4" style={{ backgroundColor: '#FAF8F5', border: '1px solid #F3F4F6' }}>
+              filteredJournals.map((j) => (
+                <div key={j.activityRecordId} className="rounded-2xl p-4" style={{ backgroundColor: '#FAF8F5', border: '1px solid #F3F4F6' }}>
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs flex-shrink-0" style={{ backgroundColor: '#FFE8D6' }}>🧑</div>
-                    <div>
-                      <p className="font-semibold text-gray-900" style={{ fontSize: '0.85rem' }}>{j.youth} 청년</p>
-                      <p className="text-gray-400" style={{ fontSize: '0.72rem' }}>{j.date} · {j.duration} · {j.type}</p>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900 truncate" style={{ fontSize: '0.85rem' }}>
+                        {j.youthName ? `${j.youthName} 청년` : '청년'}
+                        <span className="ml-1 text-gray-400 font-normal" style={{ fontSize: '0.75rem' }}>
+                          · {j.elderName} 어르신
+                        </span>
+                      </p>
+                      <p className="text-gray-400" style={{ fontSize: '0.72rem' }}>
+                        {formatJournalDate(j.actualStartAt ?? j.createdAt)} · {formatJournalDuration(j)}
+                      </p>
                     </div>
                   </div>
-                  <p className="text-gray-600 leading-relaxed" style={{ fontSize: '0.83rem' }}>{j.content}</p>
+                  {j.notes ? (
+                    <p className="text-gray-600 leading-relaxed whitespace-pre-wrap" style={{ fontSize: '0.83rem' }}>{j.notes}</p>
+                  ) : (
+                    <p className="text-gray-400" style={{ fontSize: '0.82rem' }}>청년이 작성한 메모가 없어요.</p>
+                  )}
                 </div>
               ))
             )}

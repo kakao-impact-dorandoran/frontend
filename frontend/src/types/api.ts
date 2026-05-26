@@ -94,6 +94,17 @@ export const ErrorCode = {
   INVALID_MATCH_TERMINATION_STATUS: "MT003",
   MATCH_TERMINATION_ACCESS_DENIED: "MT004",
   MATCH_ALREADY_ENDED: "MT005",
+  // 활동 기록
+  ACTIVITY_RECORD_DUPLICATED: "AR001",
+  ACTIVITY_RECORD_NOT_FOUND: "AR002",
+  ACTIVITY_RECORD_ACCESS_DENIED: "AR003",
+  ACTIVITY_RECORD_DUPLICATED_CALL_LOG: "AR004",
+  INVALID_ACTIVITY_DURATION: "AR005",
+  CALL_LOG_NOT_COMPLETED: "AR006",
+  ACTIVITY_MATCH_MISMATCH: "AR007",
+  ACTIVITY_SCHEDULE_MISMATCH: "AR008",
+  ACTIVITY_CALL_LOG_MISMATCH: "AR009",
+  ACTIVITY_MATCH_NOT_RECORDABLE: "AR010",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -457,4 +468,76 @@ export interface MatchTerminationResponse {
   reason: string;
   status: MatchTerminationRequestStatus;
   createdAt: string;
+}
+
+// ---------- ActivityRecord ----------
+/**
+ * 활동 기록 생성 요청.
+ * 백엔드 DTO: ActivityRecordCreateRequest
+ * 엔드포인트: POST /api/v1/activity-records (YOUTH)
+ *
+ * - matchId, scheduleId 필수.
+ * - callLogId 가 있으면 백엔드가 통화 startAt/endAt 으로 durationMinutes 자동 계산.
+ * - callLogId 없이 수동 입력하려면 actualStartAt/actualEndAt 또는 durationMinutes 제공.
+ * - 시간은 모두 Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface ActivityRecordCreateRequest {
+  matchId: string;
+  scheduleId: string;
+  callLogId?: string | null;
+  isCompleted: boolean;
+  actualStartAt?: string | null;
+  actualEndAt?: string | null;
+  durationMinutes?: number | null;
+  notes?: string | null;
+}
+
+/**
+ * 활동 기록 생성 응답.
+ * 백엔드 DTO: ActivityRecordResponse
+ */
+export interface ActivityRecordResponse {
+  activityRecordId: string;
+  durationMinutes: number | null;
+  totalDurationMinutes: number;
+}
+
+/**
+ * 활동 기록 목록 응답.
+ * 백엔드 DTO: ActivityRecordSummaryResponse
+ * 엔드포인트: GET /api/v1/activity-records (YOUTH/GUARDIAN/ADMIN)
+ *
+ * - YOUTH: 본인이 작성한 기록.
+ * - GUARDIAN: 본인이 등록한 어르신과 연관된 기록 (youthName, notes 는 null).
+ * - ADMIN: 전체 기록.
+ */
+export interface ActivityRecordSummaryResponse {
+  activityRecordId: string;
+  matchId: string;
+  scheduleId: string;
+  callLogId: string | null;
+  youthId: string;
+  youthName: string | null;
+  elderId: string;
+  elderName: string;
+  isCompleted: boolean;
+  actualStartAt: string | null;
+  actualEndAt: string | null;
+  durationMinutes: number | null;
+  notes: string | null;
+  createdAt: string;
+}
+
+// ---------- VolunteerStats ----------
+/**
+ * 청년 누적 활동 통계 응답.
+ * 백엔드 DTO: YouthVolunteerStatsResponse
+ * 엔드포인트: GET /api/v1/youth/volunteer-stats/me (YOUTH)
+ */
+export interface YouthVolunteerStatsResponse {
+  youthId: string;
+  totalDurationMinutes: number;
+  totalHours: number;
+  totalCertifiedHours: number;
+  availableCertificateHours: number;
 }
