@@ -60,6 +60,9 @@ export const ErrorCode = {
   ACCOUNT_SUSPENDED: "U004",
   YOUTH_PENDING: "U005",
   YOUTH_REJECTED: "U006",
+  CANNOT_BAN_ADMIN: "U007",
+  CANNOT_BAN_SELF: "U008",
+  USER_ALREADY_SUSPENDED: "U009",
   JWT_INVALID: "A001",
   JWT_EXPIRED: "A002",
   YOUTH_KEYWORD_LIMIT_EXCEEDED: "Y001",
@@ -272,6 +275,40 @@ export interface AdminYouthApprovalResponse {
   youthId: string;
   approvalStatus: AdminYouthApprovalStatus;
   rejectionReason: string | null;
+}
+
+// ---------- Admin: User (제재) ----------
+/**
+ * 관리자 사용자 제재 요청.
+ * 백엔드 DTO: AdminUserBanRequest
+ * 엔드포인트: PATCH /api/v1/admin/users/{userId}/ban
+ *
+ * - reason: optional, 최대 500자. body 자체 생략 가능.
+ * - 차단:
+ *   - U008 (403): 자기 자신 제재 불가
+ *   - U007 (403): 다른 관리자 제재 불가
+ *   - U009 (409): 이미 SUSPENDED 인 사용자
+ *   - U002 (404): 사용자 없음
+ */
+export interface AdminUserBanRequest {
+  reason?: string | null;
+}
+
+/**
+ * 관리자 사용자 제재 응답.
+ * 백엔드 DTO: AdminUserBanResponse
+ *
+ * - role: backend Role enum → 프론트 UserRole 과 동일 (YOUTH/GUARDIAN/ADMIN).
+ * - status: 제재 직후 항상 "SUSPENDED".
+ * - updatedAt: Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface AdminUserBanResponse {
+  userId: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  status: UserStatus;
+  updatedAt: string;
 }
 
 // ---------- Elder / Matching ----------
