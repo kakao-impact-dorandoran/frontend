@@ -55,6 +55,7 @@ export const ErrorCode = {
   INVALID_INPUT: "C001",
   ACCESS_DENIED: "C006",
   UNAUTHORIZED: "C007",
+  USER_NOT_FOUND: "U002",
   PASSWORD_MISMATCH: "U003",
   ACCOUNT_SUSPENDED: "U004",
   YOUTH_PENDING: "U005",
@@ -65,6 +66,9 @@ export const ErrorCode = {
   YOUTH_FORBIDDEN_WORD: "Y002",
   YOUTH_PROFILE_NOT_FOUND: "Y003",
   YOUTH_PROFILE_ALREADY_EXISTS: "Y004",
+  NOT_A_YOUTH_USER: "Y005",
+  INVALID_APPROVAL_STATUS: "Y006",
+  REJECTION_REASON_REQUIRED: "Y007",
   // 매칭
   MATCH_LIMIT_EXCEEDED: "M001",
   DUPLICATE_MATCH: "M004",
@@ -186,6 +190,82 @@ export interface YouthProfileUpdateRequest {
   keywords?: string[] | null;
   greetingComment?: string | null;
   voiceSampleUrl?: string | null;
+}
+
+// ---------- Admin: Youth Profile ----------
+/**
+ * 관리자 청년 승인/반려 상태 값.
+ * 백엔드 enum: YouthApprovalStatus (PENDING/APPROVED/REJECTED).
+ * - 관리자 API 응답은 항상 enum 값 (null 아님). 프론트 공용 YouthApprovalStatus 는 null 을 포함하므로
+ *   별도 타입으로 정의한다.
+ */
+export type AdminYouthApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+/**
+ * 관리자 청년 목록 응답.
+ * 백엔드 DTO: AdminYouthListResponse
+ * 엔드포인트: GET /api/v1/admin/youths?approvalStatus=PENDING
+ */
+export interface AdminYouthListResponse {
+  profileId: string;
+  youthId: string;
+  name: string;
+  email: string;
+  partnerCode: string | null;
+  status: UserStatus;
+  approvalStatus: AdminYouthApprovalStatus;
+  rejectionReason: string | null;
+  activityStatus: YouthActivityStatus;
+  isCompleted: boolean;
+  createdAt: string;
+}
+
+/**
+ * 관리자 청년 상세 응답.
+ * 백엔드 DTO: AdminYouthDetailResponse
+ * 엔드포인트: GET /api/v1/admin/youths/{youthId}
+ */
+export interface AdminYouthDetailResponse {
+  profileId: string;
+  youthId: string;
+  name: string;
+  email: string;
+  phoneNumber: string | null;
+  partnerCode: string | null;
+  status: UserStatus;
+  profileImageUrl: string | null;
+  keywords: string[] | null;
+  greetingComment: string;
+  voiceSampleUrl: string | null;
+  approvalStatus: AdminYouthApprovalStatus;
+  rejectionReason: string | null;
+  activityStatus: YouthActivityStatus;
+  isCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 관리자 청년 승인/반려 요청.
+ * 백엔드 DTO: AdminYouthApprovalRequest
+ * 엔드포인트: PATCH /api/v1/admin/youths/{youthId}/approval
+ *
+ * - approvalStatus: APPROVED 또는 REJECTED 만 허용. PENDING 으로 되돌리면 400 Y006.
+ * - rejectionReason: REJECTED 일 때 필수 (공백/누락 시 400 Y007), 최대 500자.
+ */
+export interface AdminYouthApprovalRequest {
+  approvalStatus: "APPROVED" | "REJECTED";
+  rejectionReason?: string | null;
+}
+
+/**
+ * 관리자 청년 승인/반려 응답.
+ * 백엔드 DTO: AdminYouthApprovalResponse
+ */
+export interface AdminYouthApprovalResponse {
+  youthId: string;
+  approvalStatus: AdminYouthApprovalStatus;
+  rejectionReason: string | null;
 }
 
 // ---------- Elder / Matching ----------

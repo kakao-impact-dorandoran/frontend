@@ -14,7 +14,7 @@ import {
   Heart, LayoutDashboard, UserCheck, ShieldOff, GitMerge,
   Flag, Award, Tablet, LogOut, Users, Clock, AlertTriangle,
   CheckCircle, XCircle, Ban, ChevronRight, Search, Download, Truck,
-  Loader2, RefreshCw, LifeBuoy, OctagonX,
+  Loader2, RefreshCw, LifeBuoy, OctagonX, Volume2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
@@ -29,10 +29,18 @@ import {
   getAdminReports,
   processAdminReport,
 } from "../../lib/api/report";
+import {
+  approveAdminYouthProfile,
+  getAdminYouthDetail,
+  getAdminYouthProfiles,
+  rejectAdminYouthProfile,
+} from "../../lib/api/adminYouthProfile";
 import type {
   AdminHelpRequestResponse,
   AdminMatchTerminationResponse,
   AdminReportResponse,
+  AdminYouthDetailResponse,
+  AdminYouthListResponse,
   HelpRequestType,
   ReportType,
 } from "../../types/api";
@@ -46,12 +54,6 @@ type MenuKey =
   | "operations"
   | "certificates"
   | "devices";
-
-const pendingYouths = [
-  { id: "Y001", name: "이서연", email: "seoyeon@mail.com", phone: "010-1234-5678", keywords: ["차분한", "이야기를 잘 듣는"], greeting: "안녕하세요, 어르신과 따뜻하게 이야기 나누고 싶어요!", appliedAt: "2026-05-20", status: "PENDING" },
-  { id: "Y002", name: "박민수", email: "minsoo@mail.com", phone: "010-9876-5432", keywords: ["유머러스한", "음악을 좋아하는"], greeting: "음악과 함께 즐거운 시간 보내요~", appliedAt: "2026-05-21", status: "PENDING" },
-  { id: "Y003", name: "최지은", email: "jieun@mail.com", phone: "010-5555-7777", keywords: ["따뜻한", "공감을 잘하는"], greeting: "진심으로 경청하고 공감하겠습니다.", appliedAt: "2026-05-22", status: "PENDING" },
-];
 
 const allUsers = [
   { id: "Y001", name: "이서연", role: "청년", email: "seoyeon@mail.com", status: "APPROVED", reportCount: 0 },
@@ -213,6 +215,55 @@ function resolveReportListError(err: unknown): string {
   return "신고 목록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
 }
 
+function resolveYouthListError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    return err.message || "청년 프로필 목록을 불러오지 못했습니다.";
+  }
+  return "청년 프로필 목록을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+function resolveYouthDetailError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.code === ErrorCode.USER_NOT_FOUND) return "청년 사용자를 찾을 수 없습니다.";
+    if (err.code === ErrorCode.YOUTH_PROFILE_NOT_FOUND) return "청년 프로필을 찾을 수 없습니다.";
+    if (err.code === ErrorCode.NOT_A_YOUTH_USER) return "청년 사용자가 아닙니다.";
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    if (err.status === 404) return "청년 프로필을 찾을 수 없습니다.";
+    return err.message || "청년 프로필 상세를 불러오지 못했습니다.";
+  }
+  return "청년 프로필 상세를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
+function resolveYouthApprovalError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.USER_NOT_FOUND:
+        return "청년 사용자를 찾을 수 없습니다.";
+      case ErrorCode.YOUTH_PROFILE_NOT_FOUND:
+        return "청년 프로필을 찾을 수 없습니다.";
+      case ErrorCode.NOT_A_YOUTH_USER:
+        return "청년 사용자가 아닙니다.";
+      case ErrorCode.INVALID_APPROVAL_STATUS:
+        return "잘못된 승인 상태입니다.";
+      case ErrorCode.REJECTION_REASON_REQUIRED:
+        return "반려 사유를 입력해 주세요.";
+      case ErrorCode.INVALID_INPUT:
+        return err.message || "입력값을 확인해 주세요.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    if (err.status === 404) return "청년 프로필을 찾을 수 없습니다.";
+    if (err.status === 409) return "이미 처리된 프로필입니다.";
+    return err.message || "승인 처리에 실패했습니다.";
+  }
+  return "처리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 function resolveReportProcessError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
@@ -238,8 +289,17 @@ const ADMIN_MEMO_MAX = 500;
 
 export default function AdminDashboard() {
   const [active, setActive] = useState<MenuKey>("dashboard");
-  const [youths, setYouths] = useState(pendingYouths);
   const [users, setUsers] = useState(allUsers);
+
+  const [pendingYouths, setPendingYouths] = useState<AdminYouthListResponse[]>([]);
+  const [youthLoading, setYouthLoading] = useState(false);
+  const [youthError, setYouthError] = useState<string | null>(null);
+  const [youthDetail, setYouthDetail] = useState<AdminYouthDetailResponse | null>(null);
+  const [youthDetailLoading, setYouthDetailLoading] = useState(false);
+  const [youthDetailError, setYouthDetailError] = useState<string | null>(null);
+  const [youthDecision, setYouthDecision] =
+    useState<"APPROVE" | "REJECT" | null>(null);
+  const [youthProcessing, setYouthProcessing] = useState(false);
 
   const [helpRequests, setHelpRequests] = useState<AdminHelpRequestResponse[]>([]);
   const [helpLoading, setHelpLoading] = useState(false);
@@ -271,7 +331,7 @@ export default function AdminDashboard() {
   const [reportMemo, setReportMemo] = useState("");
 
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
-  const [selectedYouth, setSelectedYouth] = useState<typeof pendingYouths[0] | null>(null);
+  const [selectedYouth, setSelectedYouth] = useState<AdminYouthListResponse | null>(null);
   const [rejectReason, setRejectReason] = useState("");
 
   const [banDialogOpen, setBanDialogOpen] = useState(false);
@@ -279,6 +339,20 @@ export default function AdminDashboard() {
   const [banReason, setBanReason] = useState("");
 
   const [searchUser, setSearchUser] = useState("");
+
+  const loadPendingYouths = useCallback(async () => {
+    setYouthLoading(true);
+    setYouthError(null);
+    try {
+      const list = await getAdminYouthProfiles("PENDING");
+      setPendingYouths(list ?? []);
+    } catch (err) {
+      setPendingYouths([]);
+      setYouthError(resolveYouthListError(err));
+    } finally {
+      setYouthLoading(false);
+    }
+  }, []);
 
   const loadHelpRequests = useCallback(async () => {
     setHelpLoading(true);
@@ -323,10 +397,11 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    void loadPendingYouths();
     void loadHelpRequests();
     void loadTerminationRequests();
     void loadReports();
-  }, [loadHelpRequests, loadTerminationRequests, loadReports]);
+  }, [loadPendingYouths, loadHelpRequests, loadTerminationRequests, loadReports]);
 
   const submitHelpRequestHandle = useCallback(
     async (target: AdminHelpRequestResponse) => {
@@ -427,24 +502,78 @@ export default function AdminDashboard() {
     }
   }, [reportDecisionTarget, reportMemo, loadReports]);
 
-  const handleApprove = (id: string) => {
-    setYouths((prev) => prev.map((y) => (y.id === id ? { ...y, status: "APPROVED" } : y)));
-    toast.message("청년 가입 검수는 다음 단계에서 연결 예정입니다.");
-    setReviewDialogOpen(false);
-  };
+  const openYouthReview = useCallback(async (youth: AdminYouthListResponse) => {
+    setSelectedYouth(youth);
+    setRejectReason("");
+    setYouthDecision(null);
+    setYouthDetail(null);
+    setYouthDetailError(null);
+    setReviewDialogOpen(true);
+    setYouthDetailLoading(true);
+    try {
+      const detail = await getAdminYouthDetail(youth.youthId);
+      setYouthDetail(detail);
+    } catch (err) {
+      setYouthDetailError(resolveYouthDetailError(err));
+    } finally {
+      setYouthDetailLoading(false);
+    }
+  }, []);
 
-  const handleReject = () => {
-    if (!rejectReason.trim()) {
-      toast.error("반려 사유를 입력해주세요.");
+  const closeYouthReview = useCallback(() => {
+    if (youthProcessing) return;
+    setReviewDialogOpen(false);
+    setSelectedYouth(null);
+    setYouthDetail(null);
+    setYouthDetailError(null);
+    setRejectReason("");
+    setYouthDecision(null);
+  }, [youthProcessing]);
+
+  const handleApproveYouth = useCallback(async () => {
+    if (!selectedYouth) return;
+    setYouthProcessing(true);
+    try {
+      await approveAdminYouthProfile(selectedYouth.youthId);
+      toast.success("청년 프로필이 승인되었습니다.");
+      setReviewDialogOpen(false);
+      setSelectedYouth(null);
+      setYouthDetail(null);
+      setYouthDetailError(null);
+      setRejectReason("");
+      setYouthDecision(null);
+      await loadPendingYouths();
+    } catch (err) {
+      toast.error(resolveYouthApprovalError(err));
+    } finally {
+      setYouthProcessing(false);
+    }
+  }, [selectedYouth, loadPendingYouths]);
+
+  const handleRejectYouth = useCallback(async () => {
+    if (!selectedYouth) return;
+    const reason = rejectReason.trim();
+    if (!reason) {
+      toast.error("반려 사유를 입력해 주세요.");
       return;
     }
-    setYouths((prev) =>
-      prev.map((y) => (y.id === selectedYouth?.id ? { ...y, status: "REJECTED" } : y)),
-    );
-    toast.message("청년 가입 검수는 다음 단계에서 연결 예정입니다.");
-    setReviewDialogOpen(false);
-    setRejectReason("");
-  };
+    setYouthProcessing(true);
+    try {
+      await rejectAdminYouthProfile(selectedYouth.youthId, reason);
+      toast.success("청년 프로필이 반려되었습니다.");
+      setReviewDialogOpen(false);
+      setSelectedYouth(null);
+      setYouthDetail(null);
+      setYouthDetailError(null);
+      setRejectReason("");
+      setYouthDecision(null);
+      await loadPendingYouths();
+    } catch (err) {
+      toast.error(resolveYouthApprovalError(err));
+    } finally {
+      setYouthProcessing(false);
+    }
+  }, [selectedYouth, rejectReason, loadPendingYouths]);
 
   const handleBan = () => {
     if (!banReason.trim()) {
@@ -479,7 +608,7 @@ export default function AdminDashboard() {
       { key: "certificates", label: "증명서 발급 현황", icon: <Award className="w-4 h-4" /> },
       { key: "devices",      label: "기기 상태 관리", icon: <Tablet className="w-4 h-4" /> },
     ],
-    [pendingOpsCount],
+    [pendingOpsCount, pendingYouths.length],
   );
 
   return (
@@ -533,7 +662,9 @@ export default function AdminDashboard() {
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ backgroundColor: "#FFF4E6", color: "#FF8A3D" }}>
                     <Clock className="w-6 h-6" />
                   </div>
-                  <p className="text-3xl font-bold text-gray-900 mb-1">{pendingYouths.filter((y) => y.status === "PENDING").length}</p>
+                  <p className="text-3xl font-bold text-gray-900 mb-1">
+                    {youthLoading ? <Loader2 className="w-6 h-6 animate-spin text-gray-300" /> : pendingYouths.length}
+                  </p>
                   <p className="text-xs text-gray-500">승인 대기 청년</p>
                 </div>
                 <div className="bg-white rounded-2xl p-5 shadow-sm">
@@ -686,43 +817,75 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* ===== REVIEWS (청년 가입 검수) — mock 유지 ===== */}
+          {/* ===== REVIEWS (청년 가입 검수) — 실 API 연동 ===== */}
           {active === "reviews" && (
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-2">청년 가입 검수</h1>
-              <p className="text-sm text-gray-400 mb-6">청년 프로필 승인/반려는 다음 단계에서 연결 예정입니다.</p>
-              <div className="space-y-4">
-                {youths.map((y) => (
-                  <div key={y.id} className="bg-white rounded-2xl p-5 shadow-sm">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-bold text-gray-900">{y.name}</span>
-                          <StatusBadge status={y.status} />
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h1 className="text-2xl font-bold text-gray-900">청년 가입 검수</h1>
+                  <p className="text-sm text-gray-500 mt-1">
+                    승인 대기 중인 청년 프로필을 확인하고 승인 또는 반려 처리합니다.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="rounded-xl"
+                  onClick={() => void loadPendingYouths()}
+                  disabled={youthLoading}
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 mr-1 ${youthLoading ? "animate-spin" : ""}`} />
+                  새로고침
+                </Button>
+              </div>
+
+              {youthLoading ? (
+                <div className="bg-white rounded-2xl p-8 shadow-sm flex items-center justify-center text-gray-400 gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> 불러오는 중입니다...
+                </div>
+              ) : youthError ? (
+                <div className="bg-white rounded-2xl p-6 shadow-sm">
+                  <p className="text-sm text-red-500 mb-3">{youthError}</p>
+                  <Button size="sm" variant="outline" className="rounded-xl" onClick={() => void loadPendingYouths()}>
+                    다시 시도
+                  </Button>
+                </div>
+              ) : pendingYouths.length === 0 ? (
+                <div className="bg-white rounded-2xl p-8 shadow-sm text-center text-gray-400">
+                  승인 대기 중인 청년 프로필이 없습니다.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {pendingYouths.map((y) => (
+                    <div key={y.profileId} className="bg-white rounded-2xl p-5 shadow-sm">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="font-bold text-gray-900">{y.name}</span>
+                            <StatusBadge status={y.approvalStatus} />
+                          </div>
+                          <p className="text-sm text-gray-500 mb-1 truncate">{y.email}</p>
+                          {y.partnerCode && (
+                            <p className="text-xs text-gray-400 mb-1">파트너 코드: {y.partnerCode}</p>
+                          )}
+                          <p className="text-xs text-gray-400">
+                            신청일: {formatLocalDateTime(y.createdAt)}
+                          </p>
                         </div>
-                        <p className="text-sm text-gray-500 mb-1">{y.email} · {y.phone}</p>
-                        <div className="flex flex-wrap gap-1 mb-2">
-                          {y.keywords.map((kw) => (
-                            <Badge key={kw} variant="secondary" className="text-xs rounded-full">#{kw}</Badge>
-                          ))}
-                        </div>
-                        <p className="text-sm text-gray-600 italic">"{y.greeting}"</p>
-                        <p className="text-xs text-gray-400 mt-1">가입일: {y.appliedAt}</p>
-                      </div>
-                      {y.status === "PENDING" && (
                         <Button
                           size="sm"
-                          className="ml-4 rounded-xl shrink-0"
+                          className="ml-4 rounded-xl shrink-0 text-white"
                           style={{ backgroundColor: '#FF8A3D' }}
-                          onClick={() => { setSelectedYouth(y); setReviewDialogOpen(true); }}
+                          onClick={() => void openYouthReview(y)}
+                          disabled={youthProcessing}
                         >
                           검토하기
                         </Button>
-                      )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1217,47 +1380,149 @@ export default function AdminDashboard() {
         </div>
       </main>
 
-      {/* 청년 검수 다이얼로그 (mock) */}
-      <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
-        <DialogContent className="rounded-3xl max-w-sm border-0 shadow-2xl" aria-describedby={undefined}>
+      {/* 청년 검수 다이얼로그 (실 API) */}
+      <Dialog
+        open={reviewDialogOpen}
+        onOpenChange={(o) => {
+          if (!o) closeYouthReview();
+        }}
+      >
+        <DialogContent className="rounded-3xl max-w-md border-0 shadow-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>{selectedYouth?.name} 프로필 검토</DialogTitle>
+            <DialogTitle>{selectedYouth?.name ?? "청년"} 프로필 검토</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="p-4 rounded-2xl" style={{ backgroundColor: '#FAF8F5' }}>
-              <p className="text-sm text-gray-500 mb-1">이메일 · 연락처</p>
-              <p className="text-sm font-medium text-gray-900">{selectedYouth?.email}</p>
-              <p className="text-sm font-medium text-gray-900">{selectedYouth?.phone}</p>
-              <p className="text-sm text-gray-500 mt-2 mb-1">인사말</p>
-              <p className="text-sm text-gray-700 italic">"{selectedYouth?.greeting}"</p>
+          {selectedYouth && (
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+              {youthDetailLoading ? (
+                <div className="p-6 rounded-2xl flex items-center justify-center text-gray-400 gap-2" style={{ backgroundColor: '#FAF8F5' }}>
+                  <Loader2 className="w-4 h-4 animate-spin" /> 프로필을 불러오는 중...
+                </div>
+              ) : youthDetailError ? (
+                <div className="p-4 rounded-2xl" style={{ backgroundColor: '#FEF2F2' }}>
+                  <p className="text-sm text-red-500 mb-2">{youthDetailError}</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => void openYouthReview(selectedYouth)}
+                  >
+                    다시 시도
+                  </Button>
+                </div>
+              ) : (
+                <div className="p-4 rounded-2xl space-y-3" style={{ backgroundColor: '#FAF8F5' }}>
+                  <div className="flex items-center gap-3">
+                    {youthDetail?.profileImageUrl ? (
+                      <img
+                        src={youthDetail.profileImageUrl}
+                        alt={selectedYouth.name}
+                        className="w-14 h-14 rounded-2xl object-cover"
+                      />
+                    ) : (
+                      <div className="w-14 h-14 rounded-2xl bg-orange-100 text-orange-500 flex items-center justify-center font-bold text-lg">
+                        {selectedYouth.name.charAt(0)}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-gray-900 truncate">{selectedYouth.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{selectedYouth.email}</p>
+                      {youthDetail?.phoneNumber && (
+                        <p className="text-xs text-gray-500 truncate">{youthDetail.phoneNumber}</p>
+                      )}
+                    </div>
+                  </div>
+                  {youthDetail?.keywords && youthDetail.keywords.length > 0 && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">키워드</p>
+                      <div className="flex flex-wrap gap-1">
+                        {youthDetail.keywords.map((kw) => (
+                          <Badge key={kw} variant="secondary" className="text-xs rounded-full">#{kw}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">자기소개</p>
+                    <p className="text-sm text-gray-700 italic whitespace-pre-wrap break-words">
+                      {youthDetail?.greetingComment ? `"${youthDetail.greetingComment}"` : "-"}
+                    </p>
+                  </div>
+                  {youthDetail?.voiceSampleUrl && (
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">음성 샘플</p>
+                      <a
+                        href={youthDetail.voiceSampleUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-orange-500 underline break-all"
+                      >
+                        <Volume2 className="w-3 h-3" /> {youthDetail.voiceSampleUrl}
+                      </a>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-400">
+                    신청일: {formatLocalDateTime(selectedYouth.createdAt)}
+                  </p>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">
+                  반려 사유{" "}
+                  <span className={youthDecision === "REJECT" ? "text-red-400" : "text-gray-400"}>
+                    {youthDecision === "REJECT" ? "*필수" : "(반려 시 필수)"}
+                  </span>
+                </p>
+                <Textarea
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value.slice(0, ADMIN_MEMO_MAX))}
+                  placeholder="반려 사유를 작성해 주세요..."
+                  className="rounded-2xl resize-none text-sm"
+                  rows={3}
+                  disabled={youthProcessing}
+                />
+                <p className="text-xs text-gray-400 text-right">
+                  {rejectReason.length} / {ADMIN_MEMO_MAX}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  className="flex-1 rounded-2xl border-red-200 text-red-500 hover:bg-red-50"
+                  onClick={() => {
+                    setYouthDecision("REJECT");
+                    void handleRejectYouth();
+                  }}
+                  disabled={youthProcessing || youthDetailLoading}
+                >
+                  {youthProcessing && youthDecision === "REJECT" ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <XCircle className="w-4 h-4 mr-1" /> 반려
+                    </>
+                  )}
+                </Button>
+                <Button
+                  className="flex-1 rounded-2xl text-white"
+                  style={{ backgroundColor: '#3DAF8A' }}
+                  onClick={() => {
+                    setYouthDecision("APPROVE");
+                    void handleApproveYouth();
+                  }}
+                  disabled={youthProcessing || youthDetailLoading}
+                >
+                  {youthProcessing && youthDecision === "APPROVE" ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4 mr-1" /> 승인
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">반려 사유 (반려 시 필수)</p>
-              <Textarea
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="반려 사유를 작성해주세요..."
-                className="rounded-2xl resize-none text-sm"
-                rows={3}
-              />
-            </div>
-            <div className="flex gap-3">
-              <Button
-                variant="outline"
-                className="flex-1 rounded-2xl border-red-200 text-red-500 hover:bg-red-50"
-                onClick={handleReject}
-              >
-                <XCircle className="w-4 h-4 mr-1" /> 반려
-              </Button>
-              <Button
-                className="flex-1 rounded-2xl"
-                style={{ backgroundColor: '#3DAF8A' }}
-                onClick={() => handleApprove(selectedYouth!.id)}
-              >
-                <CheckCircle className="w-4 h-4 mr-1" /> 승인
-              </Button>
-            </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
 
