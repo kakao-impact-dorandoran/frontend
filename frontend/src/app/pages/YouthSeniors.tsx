@@ -29,12 +29,14 @@ import {
   getMatchDetail,
   getMyMatches,
 } from "../../lib/api/matching";
+import { createReport } from "../../lib/api/report";
 import type {
   CallType,
   DifficultyLevel,
   MatchDetailResponse,
   MatchStatus,
   MatchSummaryResponse,
+  ReportType,
 } from "../../types/api";
 import { ErrorCode } from "../../types/api";
 import { Button } from "../components/ui/button";
@@ -122,6 +124,35 @@ function resolveTerminationRequestError(err: unknown): string {
 }
 
 const TERMINATION_REASON_MAX = 500;
+const REPORT_CONTENT_MAX = 500;
+
+const REPORT_TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
+  { value: "INAPPROPRIATE_LANGUAGE", label: "부적절한 언행" },
+  { value: "HARASSMENT",             label: "괴롭힘" },
+  { value: "NO_SHOW",                label: "약속 불이행" },
+  { value: "DEVICE_PROBLEM",         label: "기기 문제" },
+  { value: "ETC",                    label: "기타" },
+];
+
+function resolveReportCreateError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.REPORT_ACCESS_DENIED:
+        return "이 매칭에 대한 신고 권한이 없습니다.";
+      case ErrorCode.MATCH_NOT_FOUND:
+        return "매칭 정보를 찾을 수 없습니다.";
+      case ErrorCode.INVALID_INPUT:
+        return "신고 내용을 입력해 주세요.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return err.message || "신고 권한이 없습니다.";
+    if (err.status === 404) return "신고 대상을 찾을 수 없습니다.";
+    return err.message || "신고를 접수하지 못했습니다.";
+  }
+  return "신고를 접수하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+}
 
 function resolveDetailErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -161,6 +192,12 @@ export default function YouthSeniors() {
   const [terminationReason, setTerminationReason] = useState("");
   const [terminationSubmitting, setTerminationSubmitting] = useState(false);
   const [terminationError, setTerminationError] = useState<string | null>(null);
+
+  const [reportTarget, setReportTarget] = useState<MatchSummaryResponse | null>(null);
+  const [reportType, setReportType] = useState<ReportType>("INAPPROPRIATE_LANGUAGE");
+  const [reportContent, setReportContent] = useState("");
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const fetchMatches = useCallback(async (mode: "initial" | "refresh") => {
     if (mode === "initial") {
@@ -219,6 +256,48 @@ export default function YouthSeniors() {
   const showPlaceholderToast = () => {
     toast.info("다음 단계에서 연결 예정입니다.");
   };
+
+  const openReportDialog = useCallback((match: MatchSummaryResponse) => {
+    setReportTarget(match);
+    setReportType("INAPPROPRIATE_LANGUAGE");
+    setReportContent("");
+    setReportError(null);
+    setReportSubmitting(false);
+  }, []);
+
+  const closeReportDialog = useCallback(() => {
+    setReportTarget(null);
+    setReportType("INAPPROPRIATE_LANGUAGE");
+    setReportContent("");
+    setReportError(null);
+    setReportSubmitting(false);
+  }, []);
+
+  const handleSubmitReport = useCallback(async () => {
+    if (!reportTarget) return;
+    const content = reportContent.trim();
+    if (!content) {
+      setReportError("신고 내용을 입력해 주세요.");
+      return;
+    }
+    setReportSubmitting(true);
+    setReportError(null);
+    try {
+      await createReport({
+        matchId: reportTarget.matchId,
+        targetElderId: reportTarget.elderId,
+        reportType,
+        content,
+      });
+      toast.success("신고가 접수되었습니다.");
+      closeReportDialog();
+    } catch (err) {
+      const message = resolveReportCreateError(err);
+      setReportError(message);
+      toast.error(message);
+      setReportSubmitting(false);
+    }
+  }, [reportTarget, reportContent, reportType, closeReportDialog]);
 
   const refetchActiveDetail = useCallback(async (matchId: string) => {
     setIsDetailLoading(true);
@@ -431,7 +510,7 @@ export default function YouthSeniors() {
 
                   <div className="flex gap-2">
                     <button
-                      onClick={showPlaceholderToast}
+                      onClick={() => openReportDialog(m)}
                       disabled={isEnded}
                       className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-2xl border text-xs disabled:opacity-50"
                       style={{ borderColor: '#E5E7EB', color: '#EF4444', fontWeight: 600 }}
@@ -654,6 +733,103 @@ export default function YouthSeniors() {
                   </>
                 ) : (
                   "중단 요청"
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={reportTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !reportSubmitting) closeReportDialog();
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-3xl border-0 shadow-2xl" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Flag className="w-5 h-5 text-red-400" />
+              {reportTarget?.elderName} 어르신 관련 신고
+            </DialogTitle>
+            <DialogDescription>
+              불편했던 상황을 알려주시면 관리자가 확인합니다.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-gray-700">신고 유형</p>
+              <div className="grid grid-cols-2 gap-2">
+                {REPORT_TYPE_OPTIONS.map((opt) => {
+                  const active = reportType === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setReportType(opt.value)}
+                      disabled={reportSubmitting}
+                      className="py-2 rounded-2xl text-xs border-2 transition-colors disabled:opacity-60"
+                      style={{
+                        borderColor: active ? '#EF4444' : '#E5E7EB',
+                        backgroundColor: active ? '#FEF2F2' : 'white',
+                        color: active ? '#EF4444' : '#6B7280',
+                        fontWeight: active ? 600 : 400,
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium text-gray-700">신고 내용</p>
+              <textarea
+                value={reportContent}
+                onChange={(e) => {
+                  setReportContent(e.target.value.slice(0, REPORT_CONTENT_MAX));
+                  if (reportError) setReportError(null);
+                }}
+                disabled={reportSubmitting}
+                rows={4}
+                placeholder="불편했던 상황을 구체적으로 적어주세요."
+                className="w-full px-3 py-2 border border-gray-200 rounded-2xl text-sm resize-none focus:outline-none focus:border-red-300 disabled:bg-gray-50"
+              />
+              <p className="text-right text-xs text-gray-400">
+                {reportContent.length} / {REPORT_CONTENT_MAX}자
+              </p>
+            </div>
+
+            {reportError && (
+              <div className="rounded-2xl p-3" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{reportError}</p>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1 rounded-2xl"
+                onClick={closeReportDialog}
+                disabled={reportSubmitting}
+              >
+                취소
+              </Button>
+              <Button
+                className="flex-1 rounded-2xl text-white"
+                style={{ backgroundColor: '#EF4444' }}
+                onClick={() => void handleSubmitReport()}
+                disabled={reportSubmitting || !reportContent.trim()}
+              >
+                {reportSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin mr-1" />
+                    접수 중...
+                  </>
+                ) : (
+                  "신고 접수"
                 )}
               </Button>
             </div>

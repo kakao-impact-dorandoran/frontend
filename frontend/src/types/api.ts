@@ -122,6 +122,10 @@ export const ErrorCode = {
   HELP_REQUEST_NOT_FOUND: "H001",
   HELP_REQUEST_ALREADY_HANDLED: "H002",
   INVALID_HELP_REQUEST_STATUS: "H003",
+  // 신고 (Report)
+  REPORT_NOT_FOUND: "R001",
+  INVALID_REPORT_STATUS: "R002",
+  REPORT_ACCESS_DENIED: "R003",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -748,6 +752,96 @@ export interface AdminMatchTerminationResponse {
  */
 export interface AdminMatchTerminationProcessRequest {
   status: MatchTerminationRequestStatus;
+  adminMemo?: string | null;
+}
+
+// ---------- Report ----------
+/**
+ * 백엔드 enum: ReportType
+ */
+export type ReportType =
+  | "INAPPROPRIATE_LANGUAGE"
+  | "HARASSMENT"
+  | "NO_SHOW"
+  | "DEVICE_PROBLEM"
+  | "ETC";
+
+/**
+ * 백엔드 enum: ReportStatus
+ */
+export type ReportStatus = "PENDING" | "REVIEWING" | "RESOLVED" | "REJECTED";
+
+/**
+ * 신고 생성 요청.
+ * 백엔드 DTO: ReportCreateRequest
+ * 엔드포인트: POST /api/v1/reports (YOUTH/GUARDIAN)
+ *
+ * - reportType, content 는 필수 (@NotNull, @NotBlank).
+ * - matchId / scheduleId / targetUserId / targetElderId 는 모두 optional 이지만
+ *   매칭/일정과 연관된 신고면 함께 보내는 것이 권장됨 (백엔드에서 신고자-매칭 관계 검증).
+ */
+export interface ReportCreateRequest {
+  matchId?: string | null;
+  scheduleId?: string | null;
+  targetUserId?: string | null;
+  targetElderId?: string | null;
+  reportType: ReportType;
+  content: string;
+}
+
+/**
+ * 신고 생성/단건 응답.
+ * 백엔드 DTO: ReportResponse
+ */
+export interface ReportResponse {
+  reportId: string;
+  reporterUserId: string | null;
+  targetUserId: string | null;
+  targetElderId: string | null;
+  matchId: string | null;
+  scheduleId: string | null;
+  reportType: ReportType;
+  content: string;
+  status: ReportStatus;
+  createdAt: string;
+}
+
+/**
+ * 관리자 신고 응답.
+ * 백엔드 DTO: AdminReportResponse
+ * 엔드포인트:
+ *  - GET   /api/v1/admin/reports?status=PENDING
+ *  - PATCH /api/v1/admin/reports/{reportId}
+ */
+export interface AdminReportResponse {
+  reportId: string;
+  reporterUserId: string | null;
+  reporterUserName: string | null;
+  targetUserId: string | null;
+  targetUserName: string | null;
+  targetElderId: string | null;
+  targetElderName: string | null;
+  matchId: string | null;
+  scheduleId: string | null;
+  reportType: ReportType;
+  content: string;
+  status: ReportStatus;
+  adminId: string | null;
+  adminMemo: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+/**
+ * 관리자 신고 처리 요청.
+ * 백엔드 DTO: AdminReportProcessRequest
+ * - status 는 PENDING 제외 (REVIEWING / RESOLVED / REJECTED).
+ *   PENDING 으로 처리하면 400 R002.
+ * - 이미 RESOLVED/REJECTED 인 신고를 재처리하면 400 R002.
+ * - adminMemo 는 optional.
+ */
+export interface AdminReportProcessRequest {
+  status: ReportStatus;
   adminMemo?: string | null;
 }
 
