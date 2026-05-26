@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { Button } from "../components/ui/button";
 import {
   Heart, LogOut, User, Plus, Tablet, ChevronRight, CheckCircle, XCircle,
   AlertCircle, Clock, FileText, Flag, BookOpen, Loader2, RefreshCw,
+  Calendar as CalendarIcon,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { toast } from "sonner";
@@ -14,7 +15,13 @@ import {
   createElderAvailableTime,
   getElderAvailableTimes,
 } from "../../lib/api/availableTime";
-import type { AvailableTimeResponse, ElderResponse } from "../../types/api";
+import { getMySchedules } from "../../lib/api/schedule";
+import type {
+  AvailableTimeResponse,
+  ElderResponse,
+  ScheduleResponse,
+  ScheduleStatus,
+} from "../../types/api";
 import { ErrorCode } from "../../types/api";
 import { useAuth } from "../../lib/auth/AuthContext";
 
@@ -80,6 +87,38 @@ function resolveAvailLoadError(err: unknown): string {
   return "가능 시간을 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
 }
 
+function resolveScheduleLoadError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "보호자 권한이 필요합니다.";
+    }
+    return err.message || "일정 정보를 불러오지 못했습니다.";
+  }
+  return "일정 정보를 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
+const SCHEDULE_STATUS_LABEL: Record<ScheduleStatus, { label: string; color: string; bg: string }> = {
+  PENDING:   { label: "대기 중", color: "#92400E", bg: "#FEF3C7" },
+  CONFIRMED: { label: "확정",    color: "#6D28D9", bg: "#EDE9FE" },
+  COMPLETED: { label: "완료",    color: "#3DAF8A", bg: "#E8F8F5" },
+  CANCELED:  { label: "취소됨",  color: "#9CA3AF", bg: "#F3F4F6" },
+};
+
+const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat("ko-KR", { month: "long", day: "numeric" });
+
+function formatScheduleRange(startStr: string, endStr: string): string {
+  const { date, time: startTime } = splitLocalDateTime(startStr);
+  const { time: endTime } = splitLocalDateTime(endStr);
+  const [y, m, d] = date.split("-").map((n) => Number(n));
+  if (!y || !m || !d) {
+    return `${date} ${startTime} ~ ${endTime}`;
+  }
+  const dt = new Date(y, m - 1, d);
+  return `${MONTH_DAY_FORMATTER.format(dt)} ${startTime} ~ ${endTime}`;
+}
+
 function resolveAvailCreateError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
@@ -128,6 +167,10 @@ export default function GuardianDashboard() {
   const [availStart, setAvailStart] = useState<string>("");
   const [availEnd, setAvailEnd] = useState<string>("");
   const [isSubmittingAvail, setIsSubmittingAvail] = useState(false);
+
+  const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
+  const [schedulesLoading, setSchedulesLoading] = useState(false);
+  const [schedulesError, setSchedulesError] = useState<string | null>(null);
 
   // F-31 신고하기
   const [reportOpen, setReportOpen] = useState(false);
@@ -217,6 +260,26 @@ export default function GuardianDashboard() {
     [],
   );
 
+  const loadSchedules = useCallback(async () => {
+    if (!user) {
+      setSchedules([]);
+      setSchedulesError(null);
+      setSchedulesLoading(false);
+      return;
+    }
+    setSchedulesLoading(true);
+    setSchedulesError(null);
+    try {
+      const list = await getMySchedules();
+      setSchedules(list ?? []);
+    } catch (err) {
+      setSchedules([]);
+      setSchedulesError(resolveScheduleLoadError(err));
+    } finally {
+      setSchedulesLoading(false);
+    }
+  }, [user]);
+
   useEffect(() => {
     void loadElders();
   }, [loadElders]);
@@ -224,6 +287,22 @@ export default function GuardianDashboard() {
   useEffect(() => {
     void loadElderAvailTimes(selectedElderId);
   }, [selectedElderId, loadElderAvailTimes]);
+
+  useEffect(() => {
+    void loadSchedules();
+  }, [loadSchedules]);
+
+  const sortedSchedules = useMemo(() => {
+    const active: ScheduleResponse[] = [];
+    const canceled: ScheduleResponse[] = [];
+    for (const s of schedules) {
+      if (s.status === "CANCELED") canceled.push(s);
+      else active.push(s);
+    }
+    active.sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt));
+    canceled.sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt));
+    return [...active, ...canceled];
+  }, [schedules]);
 
   const handleSubmitAvail = async () => {
     if (!user) {
@@ -456,6 +535,145 @@ export default function GuardianDashboard() {
             })}
           </div>
         )}
+
+        {/* 다가오는 일정 (FE-5A 보호자 일정 조회) */}
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-gray-700" style={{ fontSize: '1rem', fontWeight: 600 }}>
+              다가오는 일정
+            </h2>
+            <button
+              onClick={() => void loadSchedules()}
+              disabled={schedulesLoading}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-xl text-gray-500 hover:bg-emerald-50"
+              style={{ fontSize: '0.75rem', fontWeight: 600 }}
+              aria-label="일정 새로고침"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${schedulesLoading ? 'animate-spin' : ''}`} />
+              새로고침
+            </button>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm p-5">
+            {schedulesLoading ? (
+              <div className="py-6 flex items-center justify-center gap-2 text-gray-400">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span style={{ fontSize: '0.88rem' }}>일정을 불러오는 중...</span>
+              </div>
+            ) : schedulesError ? (
+              <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{schedulesError}</p>
+                <button
+                  onClick={() => void loadSchedules()}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                  style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.8rem', fontWeight: 600 }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  다시 시도
+                </button>
+              </div>
+            ) : sortedSchedules.length === 0 ? (
+              <div className="rounded-2xl p-6 text-center text-gray-400" style={{ backgroundColor: '#FAF8F5', border: '1.5px dashed #E5E7EB' }}>
+                <CalendarIcon className="w-8 h-8 mx-auto mb-2 opacity-40" />
+                <p style={{ fontSize: '0.9rem', fontWeight: 600 }}>예정된 일정이 없습니다</p>
+                <p style={{ fontSize: '0.78rem' }} className="mt-1">
+                  청년이 어르신과 대화 일정을 만들면 여기에 표시됩니다.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {sortedSchedules.map((s) => {
+                  const status = SCHEDULE_STATUS_LABEL[s.status];
+                  const isCanceled = s.status === "CANCELED";
+                  return (
+                    <div
+                      key={s.scheduleId}
+                      className="rounded-2xl overflow-hidden"
+                      style={{
+                        border: `1.5px solid ${isCanceled ? '#E5E7EB' : '#C7EBDB'}`,
+                        opacity: isCanceled ? 0.7 : 1,
+                      }}
+                    >
+                      <div
+                        className="px-4 py-2 flex items-center justify-between"
+                        style={{ backgroundColor: isCanceled ? '#F9FAFB' : '#F0FAF6' }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <CalendarIcon className="w-3.5 h-3.5" style={{ color: isCanceled ? '#9CA3AF' : '#3DAF8A' }} />
+                          <span style={{ fontSize: '0.78rem', fontWeight: 700, color: isCanceled ? '#9CA3AF' : '#3DAF8A' }}>
+                            대화 일정
+                          </span>
+                        </div>
+                        <span
+                          className="text-xs px-2.5 py-0.5 rounded-full"
+                          style={{ backgroundColor: status.bg, color: status.color, fontWeight: 600 }}
+                        >
+                          {status.label}
+                        </span>
+                      </div>
+
+                      <div className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className="text-3xl leading-none">👵</span>
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className="text-gray-900 truncate"
+                              style={{
+                                fontWeight: 700,
+                                fontSize: '0.95rem',
+                                textDecoration: isCanceled ? 'line-through' : 'none',
+                              }}
+                            >
+                              {s.elderName} 어르신
+                            </p>
+                            <p className="text-gray-500 mt-0.5" style={{ fontSize: '0.82rem' }}>
+                              청년 {s.youthName}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div
+                          className="mt-3 flex items-center gap-1.5 px-3 py-2 rounded-xl"
+                          style={{ backgroundColor: '#FAF8F5', color: '#6B7280' }}
+                        >
+                          <Clock className="w-3.5 h-3.5" style={{ color: '#3DAF8A' }} />
+                          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                            {formatScheduleRange(s.scheduledStartAt, s.scheduledEndAt)}
+                          </span>
+                        </div>
+
+                        {isCanceled && s.cancelReason && (
+                          <p className="text-xs text-gray-400 mt-2">
+                            취소 사유: {s.cancelReason}
+                          </p>
+                        )}
+
+                        <div className="mt-3 flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => toast.message("일정 상세 보기는 다음 단계에서 연결 예정입니다.")}
+                            className="flex-1 py-2 rounded-xl border text-gray-500"
+                            style={{ borderColor: '#E5E7EB', fontWeight: 600, fontSize: '0.82rem' }}
+                          >
+                            일정 상세
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toast.message("통화 보기는 다음 단계에서 연결 예정입니다.")}
+                            className="flex-1 py-2 rounded-xl border text-gray-500"
+                            style={{ borderColor: '#E5E7EB', fontWeight: 600, fontSize: '0.82rem' }}
+                          >
+                            통화 보기
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* 어르신 가능 시간 관리 (FE-4B 백엔드 연동) */}
         <div className="mt-8">
