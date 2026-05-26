@@ -118,6 +118,10 @@ export const ErrorCode = {
   DEVICE_AUTH_REQUIRED: "D005",
   INVALID_DEVICE_AUTHORIZATION: "D006",
   DEVICE_NOT_REGISTERED: "D007",
+  // 도움 요청 (HelpRequest)
+  HELP_REQUEST_NOT_FOUND: "H001",
+  HELP_REQUEST_ALREADY_HANDLED: "H002",
+  INVALID_HELP_REQUEST_STATUS: "H003",
 } as const;
 
 export type ErrorCodeValue = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -634,6 +638,48 @@ export interface DeviceMainResponse {
   todaySchedule: DeviceTodayScheduleResponse | null;
   buttons: DeviceButtonType[];
   deviceStatus: DeviceStatus;
+}
+
+// ---------- HelpRequest ----------
+/**
+ * 백엔드 enum: HelpRequestType
+ */
+export type HelpRequestType = "DEVICE_HELP" | "EMERGENCY" | "ETC";
+
+/**
+ * 백엔드 enum: HelpRequestStatus
+ */
+export type HelpRequestStatus = "PENDING" | "HANDLED";
+
+/**
+ * 도움 요청 생성 요청.
+ * 백엔드 DTO: HelpRequestCreateRequest
+ * 엔드포인트: POST /api/v1/help-requests (Device token)
+ *
+ * - body 전체 또는 모든 필드 optional. 어르신이 버튼만 누르면 빈 body 로 생성 가능.
+ * - deviceStatus: 임의 키/값 (예: battery, wifi). 현재 단순 저장만.
+ */
+export interface HelpRequestCreateRequest {
+  requestType?: HelpRequestType | null;
+  deviceStatus?: Record<string, unknown> | null;
+}
+
+/**
+ * 도움 요청 생성/단건 응답.
+ * 백엔드 DTO: HelpRequestResponse
+ * 엔드포인트: POST /api/v1/help-requests
+ *
+ * - handledStatus: PENDING (생성 직후) / HANDLED (관리자 처리 완료)
+ * - createdAt 은 Asia/Seoul wall clock (LocalDateTime, 타임존 suffix 없음).
+ */
+export interface HelpRequestResponse {
+  helpRequestId: string;
+  elderId: string;
+  deviceId: string | null;
+  requestType: HelpRequestType | null;
+  deviceStatus: Record<string, unknown> | null;
+  handledStatus: HelpRequestStatus;
+  createdAt: string;
 }
 
 // ---------- VolunteerStats ----------
