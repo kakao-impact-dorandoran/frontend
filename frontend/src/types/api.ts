@@ -595,6 +595,47 @@ export interface CallLogResponse {
   createdAt: string;
 }
 
+// ---------- Device ----------
+/**
+ * 백엔드 enum: DeviceStatus
+ */
+export type DeviceStatus = "UNREGISTERED" | "REGISTERED" | "ERROR";
+
+/**
+ * 백엔드 enum: DeviceButtonType
+ */
+export type DeviceButtonType = "VIDEO_CALL" | "AUDIO_CALL" | "HELP_REQUEST";
+
+/**
+ * 전용 기기 메인 화면의 오늘 일정 응답.
+ * 백엔드 DTO: TodayScheduleResponse
+ * - scheduledStartAt/scheduledEndAt: Asia/Seoul wall clock (LocalDateTime).
+ * - 오늘 KST 확정 일정이 없으면 메인 응답에서 null.
+ */
+export interface DeviceTodayScheduleResponse {
+  scheduleId: string;
+  matchId: string;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+  callType: CallType;
+  youthName: string;
+}
+
+/**
+ * 전용 기기 메인 응답.
+ * 백엔드 DTO: DeviceMainResponse
+ * 엔드포인트: GET /api/v1/device/main
+ * - Auth: Authorization: Device {deviceToken}
+ * - todaySchedule 는 오늘 확정 일정이 없으면 null.
+ */
+export interface DeviceMainResponse {
+  elderId: string;
+  elderName: string;
+  todaySchedule: DeviceTodayScheduleResponse | null;
+  buttons: DeviceButtonType[];
+  deviceStatus: DeviceStatus;
+}
+
 // ---------- VolunteerStats ----------
 /**
  * 청년 누적 활동 통계 응답.
