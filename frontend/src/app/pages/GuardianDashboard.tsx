@@ -279,8 +279,14 @@ function resolveAvailCreateError(err: unknown): string {
 
 export default function GuardianDashboard() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [logoutConfirm, setLogoutConfirm] = useState(false);
+  const guardianDisplayName = user?.name ?? "보호자";
+
+  const handleLogout = useCallback(() => {
+    logout();
+    navigate("/", { replace: true });
+  }, [logout, navigate]);
 
   const [elders, setElders] = useState<ElderResponse[]>([]);
   const [eldersLoading, setEldersLoading] = useState(false);
@@ -729,7 +735,7 @@ export default function GuardianDashboard() {
         `}</style>
         <div className="rounded-3xl p-6 mb-6 relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #3DAF8A 0%, #52C9A0 100%)' }}>
           <div className="relative z-10">
-            <h1 className="text-white mb-1" style={{ fontSize: '1.5rem', fontWeight: 700 }}>최보호님 반가워요! 👋</h1>
+            <h1 className="text-white mb-1" style={{ fontSize: '1.5rem', fontWeight: 700 }}>{guardianDisplayName}님 반가워요! 👋</h1>
             <p className="text-white/80 text-sm">어르신의 대화 활동을 확인하세요</p>
           </div>
           <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-white/10" style={{ animation: 'gdrift1 13s ease-in-out infinite' }} />
@@ -1869,7 +1875,7 @@ export default function GuardianDashboard() {
         title="로그아웃 하시겠습니까?"
         confirmLabel="로그아웃"
         confirmColor="#3DAF8A"
-        onConfirm={() => navigate("/")}
+        onConfirm={handleLogout}
         onCancel={() => setLogoutConfirm(false)}
       />
     </div>

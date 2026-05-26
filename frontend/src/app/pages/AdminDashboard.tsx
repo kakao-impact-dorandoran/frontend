@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { useAuth } from "../../lib/auth/AuthContext";
 import { Button } from "../components/ui/button";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
@@ -314,7 +315,13 @@ function resolveReportProcessError(err: unknown): string {
 const ADMIN_MEMO_MAX = 500;
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
+  const { logout } = useAuth();
   const [active, setActive] = useState<MenuKey>("dashboard");
+  const handleLogout = useCallback(() => {
+    logout();
+    navigate("/login", { replace: true });
+  }, [logout, navigate]);
   const [users, setUsers] = useState(allUsers);
 
   const [pendingYouths, setPendingYouths] = useState<AdminYouthListResponse[]>([]);
@@ -701,11 +708,14 @@ export default function AdminDashboard() {
           ))}
         </nav>
         <div className="px-3 mt-4">
-          <Link to="/login">
-            <Button variant="ghost" className="w-full justify-start gap-2 rounded-2xl text-gray-500 text-sm">
-              <LogOut className="w-4 h-4" /> 로그아웃
-            </Button>
-          </Link>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={handleLogout}
+            className="w-full justify-start gap-2 rounded-2xl text-gray-500 text-sm"
+          >
+            <LogOut className="w-4 h-4" /> 로그아웃
+          </Button>
         </div>
       </aside>
 
