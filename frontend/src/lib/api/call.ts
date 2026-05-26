@@ -64,3 +64,19 @@ export function endCallByYouth(
     },
   );
 }
+
+export function endCallByDevice(
+  deviceToken: string,
+  callLogId: string,
+  body?: CallEndRequest,
+): Promise<CallLogResponse> {
+  return apiRequest<CallLogResponse>(
+    `/api/v1/calls/${encodeURIComponent(callLogId)}/end`,
+    {
+      method: "PATCH",
+      auth: "device",
+      deviceToken,
+      body: body ?? {},
+    },
+  );
+}
