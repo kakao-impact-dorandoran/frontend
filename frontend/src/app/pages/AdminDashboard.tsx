@@ -35,6 +35,7 @@ import {
   getAdminYouthProfiles,
   rejectAdminYouthProfile,
 } from "../../lib/api/adminYouthProfile";
+import { banAdminUser } from "../../lib/api/adminUser";
 import type {
   AdminHelpRequestResponse,
   AdminMatchTerminationResponse,
@@ -264,6 +265,31 @@ function resolveYouthApprovalError(err: unknown): string {
   return "처리에 실패했습니다. 잠시 후 다시 시도해 주세요.";
 }
 
+function resolveUserBanError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.USER_NOT_FOUND:
+        return "사용자를 찾을 수 없습니다.";
+      case ErrorCode.CANNOT_BAN_ADMIN:
+        return "관리자 계정은 제재할 수 없습니다.";
+      case ErrorCode.CANNOT_BAN_SELF:
+        return "자기 자신은 제재할 수 없습니다.";
+      case ErrorCode.USER_ALREADY_SUSPENDED:
+        return "이미 이용이 제한된 사용자입니다.";
+      case ErrorCode.INVALID_INPUT:
+        return err.message || "입력값을 확인해 주세요.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) return "관리자 권한이 필요합니다.";
+    if (err.status === 404) return "사용자를 찾을 수 없습니다.";
+    if (err.status === 409) return "이미 이용이 제한된 사용자입니다.";
+    return err.message || "사용자 제재에 실패했습니다.";
+  }
+  return "사용자 제재에 실패했습니다. 잠시 후 다시 시도해 주세요.";
+}
+
 function resolveReportProcessError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
@@ -334,9 +360,17 @@ export default function AdminDashboard() {
   const [selectedYouth, setSelectedYouth] = useState<AdminYouthListResponse | null>(null);
   const [rejectReason, setRejectReason] = useState("");
 
+  type BanTarget = {
+    userId: string;
+    name: string;
+    email: string | null;
+    role: string | null;
+    source: "report" | "mock";
+  };
   const [banDialogOpen, setBanDialogOpen] = useState(false);
-  const [banTarget, setBanTarget] = useState<typeof allUsers[0] | null>(null);
+  const [banTarget, setBanTarget] = useState<BanTarget | null>(null);
   const [banReason, setBanReason] = useState("");
+  const [banProcessing, setBanProcessing] = useState(false);
 
   const [searchUser, setSearchUser] = useState("");
 
@@ -575,18 +609,44 @@ export default function AdminDashboard() {
     }
   }, [selectedYouth, rejectReason, loadPendingYouths]);
 
-  const handleBan = () => {
-    if (!banReason.trim()) {
-      toast.error("제재 사유를 입력해주세요.");
+  const closeBanDialog = useCallback(() => {
+    if (banProcessing) return;
+    setBanDialogOpen(false);
+    setBanTarget(null);
+    setBanReason("");
+  }, [banProcessing]);
+
+  const handleBan = useCallback(async () => {
+    if (!banTarget) return;
+    const reason = banReason.trim();
+    if (!reason) {
+      toast.error("제재 사유를 입력해 주세요.");
       return;
     }
-    setUsers((prev) =>
-      prev.map((u) => (u.id === banTarget?.id ? { ...u, status: "SUSPENDED" } : u)),
-    );
-    toast.message("계정 제재는 다음 단계에서 연결 예정입니다.");
-    setBanDialogOpen(false);
-    setBanReason("");
-  };
+    if (banTarget.source === "mock") {
+      setUsers((prev) =>
+        prev.map((u) => (u.id === banTarget.userId ? { ...u, status: "SUSPENDED" } : u)),
+      );
+      toast.message("해당 항목은 mock 데이터입니다. 실 사용자 제재는 신고 카드에서 진행해 주세요.");
+      setBanDialogOpen(false);
+      setBanTarget(null);
+      setBanReason("");
+      return;
+    }
+    setBanProcessing(true);
+    try {
+      await banAdminUser(banTarget.userId, { reason });
+      toast.success(`${banTarget.name} 님 계정이 제재되었습니다.`);
+      setBanDialogOpen(false);
+      setBanTarget(null);
+      setBanReason("");
+      await loadReports();
+    } catch (err) {
+      toast.error(resolveUserBanError(err));
+    } finally {
+      setBanProcessing(false);
+    }
+  }, [banTarget, banReason, loadReports]);
 
   const filteredUsers = users.filter((u) =>
     u.name.includes(searchUser) || u.email.includes(searchUser),
@@ -923,7 +983,17 @@ export default function AdminDashboard() {
                           size="sm"
                           variant="outline"
                           className="rounded-xl border-red-200 text-red-500 hover:bg-red-50"
-                          onClick={() => { setBanTarget(u); setBanDialogOpen(true); }}
+                          onClick={() => {
+                            setBanTarget({
+                              userId: u.id,
+                              name: u.name,
+                              email: u.email,
+                              role: u.role,
+                              source: "mock",
+                            });
+                            setBanReason("");
+                            setBanDialogOpen(true);
+                          }}
                         >
                           <Ban className="w-3.5 h-3.5 mr-1" /> 제재
                         </Button>
@@ -1191,6 +1261,7 @@ export default function AdminDashboard() {
                   <div className="space-y-3">
                     {reports.map((r) => {
                       const processing = reportProcessingId === r.reportId;
+                      const canBanTarget = !!r.targetUserId;
                       return (
                         <div key={r.reportId} className="bg-white rounded-2xl p-5 shadow-sm">
                           <div className="flex items-start justify-between gap-4 mb-3">
@@ -1221,11 +1292,11 @@ export default function AdminDashboard() {
                               {r.content}
                             </p>
                           </div>
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             <Button
                               size="sm"
                               variant="outline"
-                              className="flex-1 rounded-xl border-red-200 text-red-500 hover:bg-red-50"
+                              className="flex-1 min-w-[7rem] rounded-xl border-red-200 text-red-500 hover:bg-red-50"
                               disabled={processing || r.status !== "PENDING"}
                               onClick={() => openReportDecision(r, "REJECTED")}
                             >
@@ -1233,7 +1304,7 @@ export default function AdminDashboard() {
                             </Button>
                             <Button
                               size="sm"
-                              className="flex-1 rounded-xl text-white"
+                              className="flex-1 min-w-[7rem] rounded-xl text-white"
                               style={{ backgroundColor: "#3DAF8A" }}
                               disabled={processing || r.status !== "PENDING"}
                               onClick={() => openReportDecision(r, "RESOLVED")}
@@ -1245,6 +1316,36 @@ export default function AdminDashboard() {
                                   <CheckCircle className="w-3.5 h-3.5 mr-1" /> 해결됨
                                 </>
                               )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1 min-w-[10rem] rounded-xl border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-50"
+                              disabled={processing || !canBanTarget}
+                              title={
+                                canBanTarget
+                                  ? "신고 대상 사용자를 SUSPENDED 상태로 변경"
+                                  : "신고 대상이 사용자가 아니거나 userId 가 없어 제재할 수 없습니다"
+                              }
+                              onClick={() => {
+                                if (!r.targetUserId) return;
+                                setBanTarget({
+                                  userId: r.targetUserId,
+                                  name: r.targetUserName ?? r.targetElderName ?? "대상 사용자",
+                                  email: null,
+                                  role: null,
+                                  source: "report",
+                                });
+                                setBanReason(
+                                  `[신고 ${r.reportId.slice(0, 8)}] ${REPORT_TYPE_LABEL[r.reportType]}: ${r.content}`.slice(
+                                    0,
+                                    ADMIN_MEMO_MAX,
+                                  ),
+                                );
+                                setBanDialogOpen(true);
+                              }}
+                            >
+                              <Ban className="w-3.5 h-3.5 mr-1" /> 대상 사용자 제재
                             </Button>
                           </div>
                         </div>
@@ -1526,33 +1627,77 @@ export default function AdminDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* 제재 다이얼로그 (mock) */}
-      <Dialog open={banDialogOpen} onOpenChange={setBanDialogOpen}>
+      {/* 사용자 제재 다이얼로그 (실 API: PATCH /api/v1/admin/users/{userId}/ban) */}
+      <Dialog
+        open={banDialogOpen}
+        onOpenChange={(o) => {
+          if (!o) closeBanDialog();
+        }}
+      >
         <DialogContent className="rounded-3xl max-w-sm border-0 shadow-2xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>{banTarget?.name} 계정 제재</DialogTitle>
+            <DialogTitle>{banTarget?.name ?? "사용자"} 계정 제재</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-gray-600">
-              계정을 <strong className="text-red-500">SUSPENDED</strong> 상태로 변경하여 즉시 로그인을 차단합니다.
-            </p>
-            <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-700">제재 사유 <span className="text-red-400">*필수</span></p>
-              <Textarea
-                value={banReason}
-                onChange={(e) => setBanReason(e.target.value)}
-                placeholder="제재 사유를 작성해주세요..."
-                className="rounded-2xl resize-none text-sm"
-                rows={3}
-              />
+          {banTarget && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl space-y-1" style={{ backgroundColor: "#FAF8F5" }}>
+                <p className="text-sm font-medium text-gray-700">{banTarget.name}</p>
+                {banTarget.email && (
+                  <p className="text-xs text-gray-500 truncate">{banTarget.email}</p>
+                )}
+                {banTarget.role && (
+                  <p className="text-xs text-gray-400">역할: {banTarget.role}</p>
+                )}
+                {banTarget.source === "mock" && (
+                  <p className="text-xs text-orange-500 mt-1">
+                    ⚠ 이 항목은 mock 데이터입니다. 실제 제재는 신고 카드에서 진행해 주세요.
+                  </p>
+                )}
+              </div>
+              <p className="text-sm text-gray-600">
+                계정을 <strong className="text-red-500">SUSPENDED</strong> 상태로 변경하여 즉시 로그인을 차단합니다.
+              </p>
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-gray-700">
+                  제재 사유 <span className="text-red-400">*필수</span>
+                </p>
+                <Textarea
+                  value={banReason}
+                  onChange={(e) => setBanReason(e.target.value.slice(0, ADMIN_MEMO_MAX))}
+                  placeholder="제재 사유를 작성해 주세요..."
+                  className="rounded-2xl resize-none text-sm"
+                  rows={3}
+                  disabled={banProcessing}
+                />
+                <p className="text-xs text-gray-400 text-right">
+                  {banReason.length} / {ADMIN_MEMO_MAX}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <Button
+                  variant="outline"
+                  className="flex-1 rounded-2xl"
+                  onClick={closeBanDialog}
+                  disabled={banProcessing}
+                >
+                  취소
+                </Button>
+                <Button
+                  className="flex-1 rounded-2xl bg-red-500 hover:bg-red-600 text-white"
+                  onClick={() => void handleBan()}
+                  disabled={banProcessing}
+                >
+                  {banProcessing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Ban className="w-4 h-4 mr-1" /> 제재 확정
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1 rounded-2xl" onClick={() => setBanDialogOpen(false)}>취소</Button>
-              <Button className="flex-1 rounded-2xl bg-red-500 hover:bg-red-600 text-white" onClick={handleBan}>
-                <Ban className="w-4 h-4 mr-1" /> 제재 확정
-              </Button>
-            </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
 
