@@ -3,6 +3,14 @@ import { useSearchParams } from "react-router";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
   Video,
   Phone,
   HelpCircle,
@@ -18,6 +26,7 @@ import {
   RefreshCw,
   Copy,
   Settings,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../lib/api/client";
@@ -26,6 +35,7 @@ import {
   startCallByDevice,
 } from "../../lib/api/call";
 import { getDeviceMain } from "../../lib/api/device";
+import { createHelpRequestByDevice } from "../../lib/api/helpRequest";
 import {
   clearDeviceToken,
   getDeviceToken,
@@ -35,6 +45,8 @@ import type {
   CallLogResponse,
   CallType,
   DeviceMainResponse,
+  HelpRequestResponse,
+  HelpRequestType,
 } from "../../types/api";
 import { ErrorCode } from "../../types/api";
 
@@ -50,8 +62,29 @@ interface ActiveCall {
 
 type Screen =
   | { type: "home" }
-  | { type: "call"; data: ActiveCall }
-  | { type: "help"; status: "calling" | "connected"; seconds: number };
+  | { type: "call"; data: ActiveCall };
+
+const HELP_REQUEST_TYPE_OPTIONS: Array<{
+  value: HelpRequestType;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "DEVICE_HELP",
+    label: "기기 사용이 어려워요",
+    description: "버튼/화면이 잘 보이지 않거나 조작이 어려운 경우",
+  },
+  {
+    value: "EMERGENCY",
+    label: "긴급 도움이 필요해요",
+    description: "몸이 불편하거나 위급한 상황",
+  },
+  {
+    value: "ETC",
+    label: "기타 문의",
+    description: "그 밖의 도움이 필요한 경우",
+  },
+];
 
 const formatTime = (s: number) => {
   const m = Math.floor(s / 60).toString().padStart(2, "0");
@@ -119,6 +152,28 @@ function resolveStartCallError(err: unknown): string {
   return "통화를 시작하지 못했습니다. 네트워크 상태를 확인해 주세요.";
 }
 
+function resolveHelpRequestError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case ErrorCode.DEVICE_AUTH_REQUIRED:
+      case ErrorCode.INVALID_DEVICE_AUTHORIZATION:
+      case ErrorCode.DEVICE_NOT_FOUND:
+        return "기기 인증이 만료되었습니다. 토큰을 다시 입력해 주세요.";
+      case ErrorCode.DEVICE_NOT_REGISTERED:
+        return "이 기기는 현재 사용할 수 없습니다.";
+      case ErrorCode.INVALID_INPUT:
+        return err.message || "도움 요청 정보가 올바르지 않습니다.";
+      default:
+        break;
+    }
+    if (err.status === 401) return "기기 인증에 실패했습니다. 토큰을 다시 입력해 주세요.";
+    if (err.status === 403) return "이 기기는 현재 사용할 수 없습니다.";
+    if (err.status === 500) return "잠시 후 다시 시도해 주세요.";
+    return err.message || "도움 요청을 접수하지 못했습니다.";
+  }
+  return "도움 요청을 접수하지 못했습니다. 네트워크 상태를 확인해 주세요.";
+}
+
 function resolveEndCallError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {
@@ -180,6 +235,15 @@ export default function SeniorTablet() {
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const activeCallLogIdRef = useRef<string | null>(null);
+
+  const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [helpRequestType, setHelpRequestType] = useState<HelpRequestType>(
+    "DEVICE_HELP",
+  );
+  const [helpSubmitting, setHelpSubmitting] = useState(false);
+  const [lastHelpRequest, setLastHelpRequest] =
+    useState<HelpRequestResponse | null>(null);
+  const helpInFlightRef = useRef(false);
 
   const hasToken = Boolean(deviceTokenState);
 
@@ -243,24 +307,6 @@ export default function SeniorTablet() {
     return () => clearInterval(interval);
   }, [screen.type, screen.type === "call" ? screen.data.phase : null]);
 
-  useEffect(() => {
-    if (screen.type !== "help") return;
-    if (screen.status === "calling") {
-      const t = setTimeout(
-        () => setScreen({ type: "help", status: "connected", seconds: 0 }),
-        2000,
-      );
-      return () => clearTimeout(t);
-    }
-    const id = setInterval(() => {
-      setScreen((prev) => {
-        if (prev.type !== "help") return prev;
-        return { ...prev, seconds: prev.seconds + 1 };
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [screen.type, screen.type === "help" ? screen.status : null]);
-
   const handleSaveToken = useCallback(() => {
     const trimmed = tokenInput.trim();
     if (!trimmed) {
@@ -280,6 +326,7 @@ export default function SeniorTablet() {
     setDeviceMain(null);
     setDeviceMainError(null);
     setShowTokenForm(true);
+    setLastHelpRequest(null);
     toast.info("기기 토큰을 삭제했습니다.");
   }, []);
 
@@ -353,10 +400,53 @@ export default function SeniorTablet() {
     [deviceTokenState, effectiveMatchId, effectiveScheduleId, screen.type],
   );
 
-  const startHelp = useCallback(() => {
-    toast.info("도움 요청은 다음 단계에서 연결될 예정입니다.");
-    setScreen({ type: "help", status: "calling", seconds: 0 });
-  }, []);
+  const openHelpDialog = useCallback(() => {
+    if (!deviceTokenState) {
+      toast.error("기기 토큰을 먼저 등록해 주세요.");
+      setShowTokenForm(true);
+      return;
+    }
+    setHelpRequestType("DEVICE_HELP");
+    setHelpDialogOpen(true);
+  }, [deviceTokenState]);
+
+  const submitHelpRequest = useCallback(async () => {
+    if (!deviceTokenState) {
+      toast.error("기기 토큰을 먼저 등록해 주세요.");
+      setShowTokenForm(true);
+      setHelpDialogOpen(false);
+      return;
+    }
+    if (helpInFlightRef.current) return;
+    helpInFlightRef.current = true;
+    setHelpSubmitting(true);
+    try {
+      const response = await createHelpRequestByDevice(deviceTokenState, {
+        requestType: helpRequestType,
+      });
+      setLastHelpRequest(response);
+      setHelpDialogOpen(false);
+      toast.success("도움 요청이 접수되었습니다. 곧 연락드릴게요.");
+    } catch (err) {
+      const message = resolveHelpRequestError(err);
+      if (err instanceof ApiError) {
+        if (
+          err.code === ErrorCode.DEVICE_AUTH_REQUIRED ||
+          err.code === ErrorCode.INVALID_DEVICE_AUTHORIZATION ||
+          err.code === ErrorCode.DEVICE_NOT_FOUND
+        ) {
+          clearDeviceToken();
+          setDeviceTokenState(null);
+          setShowTokenForm(true);
+          setHelpDialogOpen(false);
+        }
+      }
+      toast.error(message);
+    } finally {
+      helpInFlightRef.current = false;
+      setHelpSubmitting(false);
+    }
+  }, [deviceTokenState, helpRequestType]);
 
   const handleEndCall = useCallback(async () => {
     if (screen.type !== "call") {
@@ -742,48 +832,6 @@ export default function SeniorTablet() {
     );
   }
 
-  if (screen.type === "help") {
-    return (
-      <div
-        className="min-h-screen bg-gradient-to-b from-orange-100 to-orange-50 flex flex-col items-center justify-center p-12"
-        style={{ fontFamily: "Pretendard, sans-serif" }}
-      >
-        <div className="bg-white rounded-3xl shadow-2xl p-12 max-w-2xl w-full text-center">
-          <div className="w-32 h-32 mx-auto mb-6 rounded-full bg-orange-100 flex items-center justify-center">
-            <HelpCircle className="w-20 h-20 text-orange-600" />
-          </div>
-          {screen.status === "calling" ? (
-            <>
-              <h2 className="text-4xl font-bold text-gray-900 mb-4">
-                관리자 호출 중...
-              </h2>
-              <p className="text-2xl text-gray-700 mb-8">잠시만 기다려 주세요</p>
-            </>
-          ) : (
-            <>
-              <h2 className="text-4xl font-bold text-gray-900 mb-4">
-                관리자와 연결되었습니다
-              </h2>
-              <p className="text-2xl text-gray-700 mb-2">
-                통화 시간 {formatTime(screen.seconds)}
-              </p>
-              <p className="text-xl text-gray-600 mb-8">
-                담당자: 이수진 매니저 (1588-0000)
-              </p>
-            </>
-          )}
-          <Button
-            onClick={handleReturnHome}
-            className="w-full h-20 text-3xl font-bold bg-red-600 hover:bg-red-700 rounded-2xl"
-          >
-            <PhoneOff className="w-8 h-8 mr-3" />
-            종료하기
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   const showTokenCard = !hasToken || showTokenForm;
   const todaySchedule = deviceMain?.todaySchedule ?? null;
   const startDisabled =
@@ -1030,17 +1078,25 @@ export default function SeniorTablet() {
             </button>
 
             <button
-              onClick={startHelp}
-              className="bg-white rounded-3xl shadow-md hover:shadow-xl hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-5 border-0 cursor-pointer py-10"
+              onClick={openHelpDialog}
+              disabled={!hasToken || helpSubmitting}
+              className="bg-white rounded-3xl shadow-md hover:shadow-xl hover:-translate-y-1 transition-all flex flex-col items-center justify-center gap-5 border-0 cursor-pointer py-10 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
             >
               <div
                 className="w-24 h-24 rounded-full flex items-center justify-center"
                 style={{ backgroundColor: "#FFF4D6" }}
               >
-                <HelpCircle
-                  className="w-14 h-14"
-                  style={{ color: "#E6A817" }}
-                />
+                {helpSubmitting ? (
+                  <Loader2
+                    className="w-14 h-14 animate-spin"
+                    style={{ color: "#E6A817" }}
+                  />
+                ) : (
+                  <HelpCircle
+                    className="w-14 h-14"
+                    style={{ color: "#E6A817" }}
+                  />
+                )}
               </div>
               <div className="text-center">
                 <h3 className="text-2xl font-bold text-gray-900 mb-1">
@@ -1048,10 +1104,38 @@ export default function SeniorTablet() {
                   <br />
                   요청하기
                 </h3>
-                <p className="text-lg text-gray-500">긴급 연락</p>
+                <p className="text-lg text-gray-500">
+                  {helpSubmitting ? "요청 중..." : "긴급 연락"}
+                </p>
               </div>
             </button>
           </div>
+
+          {lastHelpRequest && (
+            <div className="px-10 pb-6">
+              <div className="rounded-2xl px-5 py-4 border border-green-200 bg-green-50 text-green-800 text-sm flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 space-y-1">
+                  <p className="font-semibold">
+                    도움 요청이 접수되었습니다 ·{" "}
+                    {lastHelpRequest.handledStatus === "HANDLED"
+                      ? "처리 완료"
+                      : "처리 대기"}
+                  </p>
+                  <p className="text-xs text-green-700">
+                    {formatStartAt(lastHelpRequest.createdAt)}
+                    {lastHelpRequest.requestType
+                      ? ` · ${
+                          HELP_REQUEST_TYPE_OPTIONS.find(
+                            (o) => o.value === lastHelpRequest.requestType,
+                          )?.label ?? lastHelpRequest.requestType
+                        }`
+                      : ""}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {hasToken && !effectiveMatchId && (
             <div className="px-10 pb-8">
@@ -1063,6 +1147,76 @@ export default function SeniorTablet() {
           )}
         </div>
       </div>
+
+      <Dialog
+        open={helpDialogOpen}
+        onOpenChange={(open) => {
+          if (helpSubmitting) return;
+          setHelpDialogOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl">도움 요청 보내기</DialogTitle>
+            <DialogDescription>
+              어떤 도움이 필요하신가요? 운영자에게 즉시 전달돼요.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            {HELP_REQUEST_TYPE_OPTIONS.map((option) => {
+              const selected = helpRequestType === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setHelpRequestType(option.value)}
+                  disabled={helpSubmitting}
+                  className={`w-full rounded-xl border p-4 text-left transition-colors disabled:opacity-60 ${
+                    selected
+                      ? "border-orange-400 bg-orange-50"
+                      : "border-gray-200 bg-white hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-gray-900">
+                      {option.label}
+                    </p>
+                    {selected && (
+                      <CheckCircle2 className="w-5 h-5 text-orange-500" />
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {option.description}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => setHelpDialogOpen(false)}
+              disabled={helpSubmitting}
+              className="h-11 px-5 bg-white text-gray-700 border hover:bg-gray-50"
+            >
+              취소
+            </Button>
+            <Button
+              onClick={() => void submitHelpRequest()}
+              disabled={helpSubmitting}
+              className="h-11 px-5 bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              {helpSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  요청 보내는 중
+                </>
+              ) : (
+                "도움 요청 보내기"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
