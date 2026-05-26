@@ -6,12 +6,12 @@ import {
   Clock, Flag, BookOpen, Loader2, RefreshCw,
   Calendar as CalendarIcon, MessageCircle, UserCheck,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { toast } from "sonner";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ApiError } from "../../lib/api/client";
 import { getMyElders } from "../../lib/api/elder";
-import { getMyMatches } from "../../lib/api/matching";
+import { getMatchDetail, getMyMatches } from "../../lib/api/matching";
 import {
   createElderAvailableTime,
   getElderAvailableTimes,
@@ -22,6 +22,7 @@ import type {
   CallType,
   DifficultyLevel,
   ElderResponse,
+  MatchDetailResponse,
   MatchStatus,
   MatchSummaryResponse,
   ScheduleResponse,
@@ -102,6 +103,19 @@ function formatMatchedAt(value: string | null): string {
   if (!y || !m || !d) return value;
   const dt = new Date(y, m - 1, d, hh || 0, mm || 0);
   return MATCHED_AT_FORMATTER.format(dt);
+}
+
+function resolveMatchDetailError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "로그인이 만료되었습니다. 다시 로그인해 주세요.";
+    if (err.status === 403) {
+      if (err.code === ErrorCode.ACCOUNT_SUSPENDED) return "이용이 제한된 계정입니다.";
+      return err.message || "이 매칭 정보를 볼 권한이 없습니다.";
+    }
+    if (err.status === 404) return "매칭 정보를 찾을 수 없습니다.";
+    return err.message || "매칭 상세 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return "매칭 상세 정보를 불러오지 못했습니다. 네트워크 상태를 확인해 주세요.";
 }
 
 function resolveAvailLoadError(err: unknown): string {
@@ -199,6 +213,12 @@ export default function GuardianDashboard() {
   const [schedules, setSchedules] = useState<ScheduleResponse[]>([]);
   const [schedulesLoading, setSchedulesLoading] = useState(false);
   const [schedulesError, setSchedulesError] = useState<string | null>(null);
+
+  // FE-5C 매칭 상세 Dialog
+  const [activeMatchSummary, setActiveMatchSummary] = useState<MatchSummaryResponse | null>(null);
+  const [matchDetail, setMatchDetail] = useState<MatchDetailResponse | null>(null);
+  const [matchDetailLoading, setMatchDetailLoading] = useState(false);
+  const [matchDetailError, setMatchDetailError] = useState<string | null>(null);
 
   // F-31 신고하기 (후속 API 미연결 — placeholder)
   const [reportOpen, setReportOpen] = useState(false);
@@ -372,6 +392,41 @@ export default function GuardianDashboard() {
     canceled.sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt));
     return [...active, ...canceled];
   }, [schedules]);
+
+  const fetchMatchDetail = useCallback(async (matchId: string) => {
+    setMatchDetailLoading(true);
+    setMatchDetailError(null);
+    try {
+      const detail = await getMatchDetail(matchId);
+      setMatchDetail(detail);
+    } catch (err) {
+      setMatchDetail(null);
+      setMatchDetailError(resolveMatchDetailError(err));
+    } finally {
+      setMatchDetailLoading(false);
+    }
+  }, []);
+
+  const openMatchDetail = useCallback(
+    (match: MatchSummaryResponse) => {
+      setActiveMatchSummary(match);
+      setMatchDetail(null);
+      setMatchDetailError(null);
+      void fetchMatchDetail(match.matchId);
+    },
+    [fetchMatchDetail],
+  );
+
+  const closeMatchDetail = useCallback(() => {
+    setActiveMatchSummary(null);
+    setMatchDetail(null);
+    setMatchDetailError(null);
+    setMatchDetailLoading(false);
+  }, []);
+
+  const retryMatchDetail = useCallback(() => {
+    if (activeMatchSummary) void fetchMatchDetail(activeMatchSummary.matchId);
+  }, [activeMatchSummary, fetchMatchDetail]);
 
   const handleSubmitAvail = async () => {
     if (!user) {
@@ -689,14 +744,23 @@ export default function GuardianDashboard() {
 
                   {/* 후속 기능 버튼 — 신고/활동 기록은 다음 단계 */}
                   <div className="px-5 pb-4 pt-0 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => toast.message("활동 기록 보기는 다음 단계에서 연결 예정입니다.")}
-                      className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border text-gray-500"
-                      style={{ borderColor: '#E5E7EB', fontWeight: 600 }}
-                    >
-                      <ChevronRight className="w-3.5 h-3.5" /> 활동 기록 보기
-                    </button>
+                    {(() => {
+                      const detailTarget =
+                        visibleMatches.find((m) => m.status !== "ENDED") ?? visibleMatches[0] ?? null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (detailTarget) openMatchDetail(detailTarget);
+                          }}
+                          disabled={!detailTarget}
+                          className="flex items-center gap-1.5 text-xs py-2 px-3 rounded-2xl border text-gray-500 disabled:opacity-50"
+                          style={{ borderColor: '#E5E7EB', fontWeight: 600 }}
+                        >
+                          <ChevronRight className="w-3.5 h-3.5" /> 매칭 정보 보기
+                        </button>
+                      );
+                    })()}
                     {visibleMatches.length > 0 && visibleMatches.some((m) => m.status !== "ENDED") && (
                       <button
                         type="button"
@@ -1193,6 +1257,147 @@ export default function GuardianDashboard() {
               ))
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* FE-5C 매칭 상세 Dialog */}
+      <Dialog
+        open={activeMatchSummary !== null}
+        onOpenChange={(open) => {
+          if (!open) closeMatchDetail();
+        }}
+      >
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border-0 shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCheck className="w-5 h-5" style={{ color: '#3DAF8A' }} />
+              {activeMatchSummary?.elderName} 어르신 매칭 상세
+            </DialogTitle>
+            <DialogDescription>
+              매칭 상태와 청년 정보, 사전 인사말을 확인할 수 있습니다.
+            </DialogDescription>
+          </DialogHeader>
+
+          {matchDetailLoading ? (
+            <div className="py-10 text-center text-gray-500">
+              <Loader2 className="w-7 h-7 mx-auto mb-2 animate-spin" style={{ color: '#3DAF8A' }} />
+              <p style={{ fontSize: '0.9rem' }}>매칭 상세 정보를 불러오는 중...</p>
+            </div>
+          ) : matchDetailError ? (
+            <div className="py-6 text-center">
+              <div className="rounded-2xl p-4 text-center" style={{ backgroundColor: '#FFF1F1', border: '1.5px solid #FCA5A5' }}>
+                <p className="text-sm" style={{ color: '#B91C1C', fontWeight: 600 }}>{matchDetailError}</p>
+                <button
+                  type="button"
+                  onClick={retryMatchDetail}
+                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl"
+                  style={{ backgroundColor: '#3DAF8A', color: 'white', fontSize: '0.8rem', fontWeight: 600 }}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  다시 시도
+                </button>
+              </div>
+            </div>
+          ) : matchDetail ? (
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500" style={{ fontSize: '0.85rem' }}>매칭 상태</span>
+                <span
+                  className="text-xs px-3 py-1 rounded-full"
+                  style={{
+                    backgroundColor: MATCH_STATUS_LABEL[matchDetail.status].bg,
+                    color: MATCH_STATUS_LABEL[matchDetail.status].color,
+                    fontWeight: 600,
+                  }}
+                >
+                  {MATCH_STATUS_LABEL[matchDetail.status].label}
+                </span>
+              </div>
+
+              <div className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: '#FAF8F5' }}>
+                <p style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151' }}>어르신 정보</p>
+                <div className="grid grid-cols-2 gap-2 text-gray-600" style={{ fontSize: '0.83rem' }}>
+                  <div>이름: <span className="text-gray-900 font-medium">{matchDetail.elder.name}</span></div>
+                  <div>연령대: <span className="text-gray-900 font-medium">{matchDetail.elder.ageGroup}</span></div>
+                  <div>선호 통화: <span className="text-gray-900 font-medium">{CALL_TYPE_LABEL[matchDetail.elder.preferredCallType]}</span></div>
+                  <div>난이도: <span className="text-gray-900 font-medium">{DIFFICULTY_LABEL[matchDetail.elder.difficultyLevel]}</span></div>
+                </div>
+                {matchDetail.elder.interests && matchDetail.elder.interests.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {matchDetail.elder.interests.map((it) => (
+                      <span
+                        key={it}
+                        className="px-2.5 py-0.5 rounded-full text-xs"
+                        style={{ backgroundColor: '#FFF1E5', color: '#C2410C', fontWeight: 600 }}
+                      >
+                        #{it}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl p-4" style={{ backgroundColor: '#E8F8F5' }}>
+                <p style={{ fontWeight: 600, fontSize: '0.85rem', color: '#374151' }} className="mb-1.5">
+                  매칭된 청년
+                </p>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-sm" style={{ backgroundColor: '#FFE8D6' }}>🧑</div>
+                  <p className="text-gray-900" style={{ fontWeight: 600, fontSize: '0.95rem' }}>
+                    {matchDetail.youth.name} 청년
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl p-4" style={{ backgroundColor: '#FAF8F5' }}>
+                <div className="flex items-center gap-1.5 mb-1.5" style={{ color: '#3DAF8A' }}>
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span style={{ fontWeight: 600, fontSize: '0.8rem' }}>청년이 보낸 사전 인사말</span>
+                </div>
+                <p className="text-gray-700 whitespace-pre-wrap" style={{ fontSize: '0.88rem', lineHeight: 1.6 }}>
+                  {matchDetail.icebreakingMessage}
+                </p>
+              </div>
+
+              <div className="space-y-1.5 text-gray-600" style={{ fontSize: '0.85rem' }}>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">선택 일시</span>
+                  <span className="text-gray-900">{formatMatchedAt(matchDetail.selectedAt) || '-'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">매칭 일시</span>
+                  <span className="text-gray-900">{formatMatchedAt(matchDetail.matchedAt) || '-'}</span>
+                </div>
+                {matchDetail.endedAt && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">종료 일시</span>
+                    <span className="text-gray-900">{formatMatchedAt(matchDetail.endedAt)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => toast.message("활동 기록 보기는 다음 단계에서 연결 예정입니다.")}
+                  className="flex-1 py-2.5 rounded-2xl border text-gray-500 inline-flex items-center justify-center gap-1.5"
+                  style={{ borderColor: '#E5E7EB', fontWeight: 600, fontSize: '0.85rem' }}
+                >
+                  <BookOpen className="w-3.5 h-3.5" /> 활동 기록 보기
+                </button>
+                {matchDetail.status !== "ENDED" && (
+                  <button
+                    type="button"
+                    onClick={() => toast.message("매칭 중단 요청은 다음 단계에서 연결 예정입니다.")}
+                    className="flex-1 py-2.5 rounded-2xl border text-gray-500 inline-flex items-center justify-center gap-1.5"
+                    style={{ borderColor: '#E5E7EB', fontWeight: 600, fontSize: '0.85rem' }}
+                  >
+                    매칭 중단 요청
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
 
